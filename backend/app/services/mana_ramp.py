@@ -27,12 +27,14 @@ RAMP_PATTERNS = [
     (r'tap to add one mana of any color', 'rock_fixed'),
     (r'tap to add .* mana of', 'rock_fixed'),
     (r'tap to add .*mana', 'rock_any'),
-    (r'add (?:\{[rwubgcp]\}|[rwubgcp])\b', 'rock_fixed'),
-    (r'add (?:\{[rwubgcp]\}|[rwubgcp])\b.*add (?:\{[rwubgcp]\}|[rwubgcp])\b', 'ritual'),
-    (r'add (?:\{[rwubgcp]\}|[rwubgcp])\b.*(?:\{[rwubgcp]\}|[rwubgcp])\b', 'ritual'),
+    (r'add (?:\{[rwubgcp]\}|[rwubgcp]\b)', 'rock_fixed'),
+    (r'add (?:\{[rwubgcp]\}|[rwubgcp]\b).*add (?:\{[rwubgcp]\}|[rwubgcp]\b)', 'ritual'),
+    (r'add (?:\{[rwubgcp]\}|[rwubgcp]\b).*(?:\{[rwubgcp]\}|[rwubgcp]\b)', 'ritual'),
     (r'search your library for a basic land', 'land_ramp_basic'),
     (r'search your library for a land', 'land_ramp_any'),
-    (r'you may put a land card from your hand onto the battlefield', 'extra_land'),
+    (r'put a land card from your hand onto the battlefield', 'land_ramp_direct'),
+    (r'put a land card onto the battlefield', 'land_ramp_direct'),
+    (r'you may put a land card from your hand onto the battlefield', 'land_ramp_direct'),
     (r'you may put a land card onto the battlefield', 'land_ramp_direct'),
     (r'add an additional \{', 'extra_mana'),
     (r'costs \{.\} less to cast', 'cost_reducer'),
@@ -80,7 +82,9 @@ def classify_card(card):
             classifications['ramp'].append(label)
 
     if not classifications['ramp']:
-        if re.search(r'add (?:\{[rwubgcp]\}|[rwubgcp])\b', ot, re.IGNORECASE):
+        if re.search(r'put a land card', ot, re.IGNORECASE):
+            classifications['ramp'].append('land_ramp_direct')
+        elif re.search(r'add (?:\{[rwubgcp]\}|[rwubgcp]\b)', ot, re.IGNORECASE):
             classifications['ramp'].append('rock_fixed')
         elif re.search(r'add [a-z]+ mana', ot, re.IGNORECASE):
             classifications['ramp'].append('rock_fixed')
@@ -218,10 +222,11 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000):
         mana_from_rocks = mana_rocks if turn >= 2 else 0
 
         land_ramp_value = 0
-        if turn >= 3:
+        if turn >= 4 and land_ramps > 0:
             land_ramp_value = min(land_ramps, 1)
+            mana_from_lands += land_ramp_value
 
-        total_mana = mana_from_lands + mana_from_dorks + mana_from_rocks + land_ramp_value
+        total_mana = mana_from_lands + mana_from_dorks + mana_from_rocks
         if fast_mana > 0 and turn >= 1 and turn <= 3:
             total_mana += min(fast_mana, 1) * 2
 
