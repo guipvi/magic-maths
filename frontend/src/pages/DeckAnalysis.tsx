@@ -12,11 +12,12 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { decks, analysis } from '../services/api'
-import { BarChart3, TrendingUp, Shield, Map, Loader2 } from 'lucide-react'
+import { BarChart3, TrendingUp, Shield, Map, Bug, Loader2 } from 'lucide-react'
 import ManaCurveChart from '../components/ManaCurveChart'
 import GoldfishSim from '../components/GoldfishSim'
 import InteractionBreakdown from '../components/InteractionBreakdown'
 import LandRecommender from '../components/LandRecommender'
+import DebugPanel from '../components/DebugPanel'
 
 interface AnalysisData {
   mana_ramp: any
@@ -70,6 +71,7 @@ export default function DeckAnalysis() {
     { id: 'goldfish', label: 'Goldfish', icon: TrendingUp },
     { id: 'interactions', label: 'Interações', icon: Shield },
     { id: 'lands', label: 'Terrenos', icon: Map },
+    { id: 'debug', label: 'Debug', icon: Bug },
   ]
 
   return (
@@ -106,6 +108,7 @@ export default function DeckAnalysis() {
         {activeTab === 'goldfish' && data?.goldfish && <GoldfishSim data={data.goldfish} />}
         {activeTab === 'interactions' && data?.interactions && <InteractionBreakdown data={data.interactions} />}
         {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} />}
+        {activeTab === 'debug' && <DebugPanel cards={cards} analysis={data} />}
       </div>
     </div>
   )

@@ -11,38 +11,89 @@ Lookup order (fetch_or_get_card):
 3. Scryfall /cards/named?exact=<name> (exact name search)
 4. Scryfall /cards/search?q=<name> (fallback fuzzy search)
 
+Rate limiting:
+- Enforces a 100ms minimum interval between requests (max 10 req/s).
+- Retries on 429 with respect for the Retry-After header.
+- Uses an in-memory response cache to avoid redundant API calls.
+
 Requires a custom User-Agent header per Scryfall API policy.
 """
 
+import time
 import requests
 import logging
+from threading import Lock
 from app.extensions import db
 from app.models.card import Card
 
 logger = logging.getLogger(__name__)
 SCRYFALL_API = 'https://api.scryfall.com'
 
-
 HEADERS = {
     'User-Agent': 'MagicMaths/1.0 (https://github.com/magicmaths; guilherme@example.com)',
     'Accept': 'application/json',
 }
 
+MIN_REQUEST_INTERVAL = 0.1
+_last_request_time = 0.0
+_rate_limit_lock = Lock()
+_response_cache = {}
+_fetch_cache = {}
 
-def _scryfall_request(endpoint, params=None):
+
+def _scryfall_request(endpoint, params=None, max_retries=3):
     url = f'{SCRYFALL_API}{endpoint}'
-    try:
-        resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        resp.raise_for_status()
-        return resp.json()
-    except requests.HTTPError as e:
+
+    cache_key = (endpoint, tuple(sorted((params or {}).items())))
+    if cache_key in _response_cache:
+        return _response_cache[cache_key]
+
+    for attempt in range(max_retries):
+        with _rate_limit_lock:
+            global _last_request_time
+            elapsed = time.time() - _last_request_time
+            if elapsed < MIN_REQUEST_INTERVAL:
+                time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+            _last_request_time = time.time()
+
+        resp = None
+        try:
+            resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
+        except requests.RequestException as e:
+            logger.warning(f'Scryfall request failed: {url} - {e}')
+            return None
+
+        if resp is None:
+            return None
+
+        if resp.status_code == 429:
+            retry_after = resp.headers.get('retry-after', '?')
+            logger.warning(
+                f'Scryfall rate limited (attempt {attempt + 1}/{max_retries}). '
+                f'Retry-After: {retry_after}s — skipping card to avoid worker timeout'
+            )
+            return None
+
         if resp.status_code == 404:
             return None
-        logger.warning(f'Scryfall HTTP {resp.status_code}: {url} - {resp.text[:200]}')
-        return None
-    except requests.RequestException as e:
-        logger.warning(f'Scryfall request failed: {url} - {e}')
-        return None
+
+        if resp.status_code >= 500:
+            logger.warning(
+                f'Scryfall server error {resp.status_code}: {url} (attempt {attempt + 1}/{max_retries})'
+            )
+            time.sleep(1)
+            continue
+
+        try:
+            resp.raise_for_status()
+            result = resp.json()
+            _response_cache[cache_key] = result
+            return result
+        except requests.HTTPError:
+            logger.warning(f'Scryfall HTTP {resp.status_code}: {url} - {resp.text[:200]}')
+            return None
+
+    return None
 
 
 def _card_from_scryfall(data):
@@ -86,14 +137,20 @@ def fetch_or_get_card(name_or_id):
     if not name_or_id:
         return None
 
+    cache_key = name_or_id.strip().lower()
+    if cache_key in _fetch_cache:
+        return _fetch_cache[cache_key]
+
     card = Card.query.filter_by(oracle_id=name_or_id).first()
     if card:
+        _fetch_cache[cache_key] = card
         return card
 
     card = Card.query.filter(
         Card.name.ilike(name_or_id.strip())
     ).first()
     if card:
+        _fetch_cache[cache_key] = card
         return card
 
     if len(name_or_id) == 36 and '-' in name_or_id:
@@ -112,6 +169,7 @@ def fetch_or_get_card(name_or_id):
     if card:
         db.session.add(card)
         db.session.commit()
+        _fetch_cache[cache_key] = card
     return card
 
 
