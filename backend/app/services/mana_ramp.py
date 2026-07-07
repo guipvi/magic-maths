@@ -216,11 +216,14 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000):
         mana_from_lands = lands_in_play
         mana_from_dorks = mana_dorks if turn >= 2 else 0
         mana_from_rocks = mana_rocks if turn >= 2 else 0
-        mana_from_ramp_spells = land_ramps if turn >= 3 else 0
 
-        total_mana = mana_from_lands + mana_from_dorks + mana_from_rocks + mana_from_ramp_spells
-        if fast_mana > 0 and turn >= 1:
-            total_mana += fast_mana * 2
+        land_ramp_value = 0
+        if turn >= 3:
+            land_ramp_value = min(land_ramps, 1)
+
+        total_mana = mana_from_lands + mana_from_dorks + mana_from_rocks + land_ramp_value
+        if fast_mana > 0 and turn >= 1 and turn <= 3:
+            total_mana += min(fast_mana, 1) * 2
 
         p_land_drop = 1.0
         if land_count > 0:
@@ -234,7 +237,7 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000):
             'mana_from_lands': round(mana_from_lands, 2),
             'mana_from_dorks': mana_from_dorks,
             'mana_from_rocks': mana_from_rocks,
-            'mana_from_land_ramp': mana_from_ramp_spells,
+            'mana_from_land_ramp': land_ramp_value,
             'mana_from_rituals': fast_mana * 2 if turn >= 1 else 0,
             'total_expected_mana': round(total_mana, 2),
             'prob_hitting_land_drop': round(p_land_drop, 3),
