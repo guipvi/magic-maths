@@ -133,24 +133,23 @@ def recommend_lands(deck_cards, deck_size=None):
     avg_cmc_val = _avg_cmc(expanded)
     profile = _detect_profile(expanded)
 
-    # Frank Karsten formula (2019-2020 analysis):
-    # Lands = 31.42 - 1.04 * Ramp + 0.52 * AvgCMC + 0.84 * Draw
-    # Adjusted for Commander (99 cards): scale factor
+    # Para Commander, a fórmula clássica tende a over-estimar lands quando o deck tem
+    # muitos efeitos de mana e muita densidade de cartas de 1-2 mana.
+    # Em vez disso, usamos uma faixa mais conservadora baseada no tamanho do deck.
     if deck_size >= 99:
-        base_lands = 31.42 - 1.04 * ramp_count + 0.52 * avg_cmc_val + 0.84 * min(draw_count, 10)
-        scale = 99 / 60
-        recommended = base_lands * scale
+        base_lands = 34 + (avg_cmc_val * 0.4) - (ramp_count * 0.6) + min(draw_count, 6) * 0.2
+        recommended = base_lands * (99 / 100)
     elif deck_size >= 80:
-        base_lands = 31.42 - 1.04 * ramp_count + 0.52 * avg_cmc_val + 0.84 * min(draw_count, 10)
-        scale = deck_size / 60
-        recommended = base_lands * scale
+        base_lands = 30 + (avg_cmc_val * 0.4) - (ramp_count * 0.6) + min(draw_count, 6) * 0.2
+        recommended = base_lands * (deck_size / 100)
     else:
-        recommended = 31.42 - 1.04 * ramp_count + 0.52 * avg_cmc_val + 0.84 * min(draw_count, 10)
+        base_lands = 26 + (avg_cmc_val * 0.3) - (ramp_count * 0.4) + min(draw_count, 6) * 0.2
+        recommended = base_lands
 
     adjustment = _PROFILE_ADJUSTMENT.get(profile, 0)
     recommended += adjustment
 
-    recommended = max(deck_size * 0.2, min(deck_size * 0.5, recommended))
+    recommended = max(deck_size * 0.25, min(deck_size * 0.45, recommended))
     recommended = round(recommended)
 
     low_risk = recommended - 1
