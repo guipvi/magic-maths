@@ -1,0 +1,52 @@
+services:
+
+  backend:
+    build:
+      context: ./backend
+    container_name: magic-maths-api
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env
+    environment:
+      - DATABASE_URL=sqlite:////app/data/magicmaths.db
+      - FLASK_ENV=production
+    volumes:
+      - magic-maths-data:/app/data
+    ports:
+      - "5555:5555"
+    networks:
+      - magic-net
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: magic-maths-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - magic-net
+
+  # Opcional: PostgreSQL para produção
+  # db:
+  #   image: postgres:17-alpine
+  #   container_name: magic-maths-db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: magicmaths
+  #     POSTGRES_PASSWORD: changeme
+  #     POSTGRES_DB: magicmaths
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   networks:
+  #     - magic-net
+
+volumes:
+  magic-maths-data:
+  # pgdata:
+
+networks:
+  magic-net:
+    driver: bridge
