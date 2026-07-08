@@ -58,4 +58,5 @@ class Card(db.Model):
             'color_identity': self.color_identity,
             'type_line': self.type_line,
             'oracle_text': self.oracle_text,
+            'image_uris': self.image_uris,
         }
