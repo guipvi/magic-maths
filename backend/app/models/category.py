@@ -50,6 +50,7 @@ class DeckCardCategory(db.Model):
             'deck_id': self.deck_id,
             'card_id': self.card_id,
             'card_name': self.card.name if self.card else None,
+            'card_image_uris': self.card.image_uris if self.card else None,
             'category_id': self.category_id,
             'category_name': self.category.name if self.category else None,
             'multiplier': self.multiplier,

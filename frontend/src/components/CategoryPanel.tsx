@@ -185,38 +185,53 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
     onRefresh()
   }
 
+  const selectedCardData = cards.find((c: any) => c.card_id === selectedCard)
+  const selectedCardImage = selectedCardData?.card?.image_uris?.normal || selectedCardData?.card?.image_uris?.small
+
   return (
     <div className="card">
       <h3 className="font-semibold mb-4">Atribuir Cartas a Categorias</h3>
 
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4">
-        <select value={selectedCard} onChange={e => setSelectedCard(Number(e.target.value))}
-          className="input">
-          <option value="">Selecionar carta...</option>
-          {cards.map((c: any, i: number) => (
-            <option key={i} value={c.card_id}>{c.card?.name}</option>
-          ))}
-        </select>
-        <select value={selectedCategory} onChange={e => setSelectedCategory(Number(e.target.value))}
-          className="input">
-          <option value="">Selecionar categoria...</option>
-          {categories.map(cat => (
-            <option key={cat.id} value={cat.id}>{cat.name}</option>
-          ))}
-        </select>
-        {isRamp ? (
-          <input type="number" value={manaAmount} min={0}
-            onChange={e => setManaAmount(e.target.value === '' ? '' : Number(e.target.value))}
-            placeholder="Mana gerada" className="input" />
-        ) : (
-          <input type="number" value={multiplier} min={0} step={0.5}
-            onChange={e => setMultiplier(Number(e.target.value))}
-            placeholder="Multiplicador" className="input" />
-        )}
-        <input type="number" value={maxPerTurn} min={0}
-          onChange={e => setMaxPerTurn(e.target.value === '' ? '' : Number(e.target.value))}
-          placeholder="Max/turno" className="input" />
-        <button onClick={handleAssign} className="btn btn-primary">Atribuir</button>
+      <div className="flex gap-6 mb-4">
+        <div className="group relative shrink-0">
+          {selectedCardImage ? (
+            <img src={selectedCardImage} alt=""
+              className="w-[146px] h-[204px] rounded-lg object-cover shadow-lg transition-transform duration-200 group-hover:scale-[1.8] group-hover:z-20 group-hover:shadow-2xl relative" />
+          ) : (
+            <div className="w-[146px] h-[204px] rounded-lg bg-slate-800 border-2 border-dashed border-slate-700 flex items-center justify-center text-sm text-magic-muted">
+              ?
+            </div>
+          )}
+        </div>
+        <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 content-start">
+          <select value={selectedCard} onChange={e => setSelectedCard(Number(e.target.value))}
+            className="input">
+            <option value="">Selecionar carta...</option>
+            {cards.map((c: any, i: number) => (
+              <option key={i} value={c.card_id}>{c.card?.name}</option>
+            ))}
+          </select>
+          <select value={selectedCategory} onChange={e => setSelectedCategory(Number(e.target.value))}
+            className="input">
+            <option value="">Selecionar categoria...</option>
+            {categories.map(cat => (
+              <option key={cat.id} value={cat.id}>{cat.name}</option>
+            ))}
+          </select>
+          {isRamp ? (
+            <input type="number" value={manaAmount} min={0}
+              onChange={e => setManaAmount(e.target.value === '' ? '' : Number(e.target.value))}
+              placeholder="Mana gerada" className="input" />
+          ) : (
+            <input type="number" value={multiplier} min={0} step={0.5}
+              onChange={e => setMultiplier(Number(e.target.value))}
+              placeholder="Multiplicador" className="input" />
+          )}
+          <input type="number" value={maxPerTurn} min={0}
+            onChange={e => setMaxPerTurn(e.target.value === '' ? '' : Number(e.target.value))}
+            placeholder="Max/turno" className="input" />
+          <button onClick={handleAssign} className="btn btn-primary self-end">Atribuir</button>
+        </div>
       </div>
 
       {isRamp && (
@@ -237,6 +252,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
         <table className="w-full text-sm">
           <thead>
             <tr className="text-magic-muted border-b border-magic-border">
+              <th className="py-2 px-2 w-12"></th>
               <th className="text-left py-2 px-2">Carta</th>
               <th className="text-left py-2 px-2">Categoria</th>
               <th className="text-right py-2 px-2">Mult</th>
@@ -250,6 +266,24 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
           <tbody>
             {assignments.map(a => (
               <tr key={a.id} className="border-b border-magic-border">
+                <td className="py-1 px-2">
+                  <div className="group relative inline-block">
+                    {a.card_image_uris?.small ? (
+                      <>
+                        <img src={a.card_image_uris.small} alt=""
+                          className="w-12 h-[68px] rounded object-cover shadow cursor-pointer" />
+                        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 hidden group-hover:block pointer-events-none">
+                          <img src={a.card_image_uris.normal || a.card_image_uris.small} alt=""
+                            className="h-[400px] w-auto rounded-xl shadow-2xl border-2 border-slate-600" />
+                        </div>
+                      </>
+                    ) : (
+                      <div className="w-12 h-[68px] rounded bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] text-magic-muted">
+                        N/A
+                      </div>
+                    )}
+                  </div>
+                </td>
                 <td className="py-2 px-2">{a.card_name}</td>
                 <td className="py-2 px-2">
                   <span className="inline-flex items-center gap-1">
