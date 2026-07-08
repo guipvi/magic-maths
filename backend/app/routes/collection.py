@@ -1,3 +1,4 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
@@ -5,6 +6,7 @@ from app.models.collection import Collection
 from app.models.card import Card
 from app.services.scryfall import fetch_or_get_card
 
+logger = logging.getLogger(__name__)
 collection_bp = Blueprint('collection', __name__)
 
 
@@ -37,13 +39,23 @@ def add_to_collection():
     if not card:
         return jsonify({'error': 'Card not found'}), 404
 
-    existing = Collection.query.filter_by(
-        user_id=user_id, card_id=card.id, is_foil=is_foil
-    ).first()
+    try:
+        existing = Collection.query.filter_by(
+            user_id=user_id, card_id=card.id, is_foil=is_foil
+        ).first()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Failed to query collection: {e}')
+        return jsonify({'error': 'Database error'}), 500
 
     if existing:
         existing.quantity += quantity
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            logger.error(f'Failed to update collection: {e}')
+            return jsonify({'error': 'Failed to update collection'}), 500
         return jsonify({'collection': existing.to_dict()})
 
     entry = Collection(
@@ -54,7 +66,12 @@ def add_to_collection():
         condition=condition,
     )
     db.session.add(entry)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Failed to add collection entry: {e}')
+        return jsonify({'error': 'Failed to add to collection'}), 500
     return jsonify({'collection': entry.to_dict()}), 201
 
 
@@ -74,7 +91,12 @@ def update_entry(entry_id):
     if data.get('is_foil') is not None:
         entry.is_foil = data['is_foil']
 
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Failed to update collection entry: {e}')
+        return jsonify({'error': 'Failed to update entry'}), 500
     return jsonify({'collection': entry.to_dict()})
 
 
@@ -86,5 +108,10 @@ def delete_entry(entry_id):
     if not entry:
         return jsonify({'error': 'Entry not found'}), 404
     db.session.delete(entry)
-    db.session.commit()
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f'Failed to delete collection entry: {e}')
+        return jsonify({'error': 'Failed to delete entry'}), 500
     return jsonify({'message': 'Entry deleted'})

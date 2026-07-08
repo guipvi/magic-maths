@@ -23,6 +23,8 @@ import time
 import requests
 import logging
 from threading import Lock
+from urllib3.util.retry import Retry
+from requests.adapters import HTTPAdapter
 from app.extensions import db
 from app.models.card import Card
 
@@ -40,6 +42,25 @@ _rate_limit_lock = Lock()
 _response_cache = {}
 _fetch_cache = {}
 
+_session = None
+
+
+def _get_session():
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update(HEADERS)
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=['GET'],
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy, pool_connections=10, pool_maxsize=10)
+        _session.mount('https://', adapter)
+        _session.mount('http://', adapter)
+    return _session
+
 
 def _scryfall_request(endpoint, params=None, max_retries=3):
     url = f'{SCRYFALL_API}{endpoint}'
@@ -47,6 +68,8 @@ def _scryfall_request(endpoint, params=None, max_retries=3):
     cache_key = (endpoint, tuple(sorted((params or {}).items())))
     if cache_key in _response_cache:
         return _response_cache[cache_key]
+
+    session = _get_session()
 
     for attempt in range(max_retries):
         with _rate_limit_lock:
@@ -58,9 +81,12 @@ def _scryfall_request(endpoint, params=None, max_retries=3):
 
         resp = None
         try:
-            resp = requests.get(url, params=params, headers=HEADERS, timeout=15)
-        except requests.RequestException as e:
-            logger.warning(f'Scryfall request failed: {url} - {e}')
+            resp = session.get(url, params=params, timeout=(5, 10))
+        except Exception as e:
+            logger.warning(f'Scryfall request failed (attempt {attempt + 1}/{max_retries}): {url} - {e}')
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
             return None
 
         if resp is None:
@@ -81,8 +107,10 @@ def _scryfall_request(endpoint, params=None, max_retries=3):
             logger.warning(
                 f'Scryfall server error {resp.status_code}: {url} (attempt {attempt + 1}/{max_retries})'
             )
-            time.sleep(1)
-            continue
+            if attempt < max_retries - 1:
+                time.sleep(2 ** attempt)
+                continue
+            return None
 
         try:
             resp.raise_for_status()

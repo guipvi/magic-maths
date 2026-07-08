@@ -1,29 +1,21 @@
-/**
- * DeckAnalysis — Página principal de análise.
- *
- * Carrega os dados do deck e executa GET /api/analysis/full em paralelo
- * (backend usa ThreadPoolExecutor para rodar os 4 motores simultaneamente).
- *
- * Navegação por abas: Mana Ramp | Goldfish | Interações | Terrenos
- * Cada aba renderiza o componente de visualização correspondente.
- *
- * Recebe `id` do deck via URL params (/decks/:id).
- */
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { decks, analysis } from '../services/api'
-import { BarChart3, TrendingUp, Shield, Map, Bug, Loader2 } from 'lucide-react'
-import ManaCurveChart from '../components/ManaCurveChart'
-import GoldfishSim from '../components/GoldfishSim'
+import { Shield, Map, Bug, Tags, BarChart3, TrendingUp, Loader2 } from 'lucide-react'
 import InteractionBreakdown from '../components/InteractionBreakdown'
 import LandRecommender from '../components/LandRecommender'
 import DebugPanel from '../components/DebugPanel'
+import CategoryPanel from '../components/CategoryPanel'
+import CategoryChart from '../components/CategoryChart'
+import ManaCurveChart from '../components/ManaCurveChart'
+import GoldfishSim from '../components/GoldfishSim'
 
 interface AnalysisData {
-  mana_ramp: any
-  goldfish: any
   interactions: any
   land_recommendation: any
+  categories: any
+  mana_ramp: any
+  goldfish: any
 }
 
 export default function DeckAnalysis() {
@@ -33,7 +25,7 @@ export default function DeckAnalysis() {
   const [data, setData] = useState<AnalysisData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<string>('mana-ramp')
+  const [activeTab, setActiveTab] = useState<string>('categories')
 
   useEffect(() => {
     if (!id) return
@@ -67,7 +59,8 @@ export default function DeckAnalysis() {
   }
 
   const tabs = [
-    { id: 'mana-ramp', label: 'Mana Ramp', icon: BarChart3 },
+    { id: 'categories', label: 'Categorias', icon: Tags },
+    { id: 'mana', label: 'Mana', icon: BarChart3 },
     { id: 'goldfish', label: 'Goldfish', icon: TrendingUp },
     { id: 'interactions', label: 'Interações', icon: Shield },
     { id: 'lands', label: 'Terrenos', icon: Map },
@@ -104,9 +97,15 @@ export default function DeckAnalysis() {
       </div>
 
       <div>
-        {activeTab === 'mana-ramp' && data?.mana_ramp && <ManaCurveChart data={data.mana_ramp} />}
+        {activeTab === 'categories' && (
+          <div className="space-y-6">
+            {id && <CategoryPanel deckId={id} cards={cards} />}
+            {data?.categories && <CategoryChart data={data.categories} />}
+          </div>
+        )}
+        {activeTab === 'mana' && data?.mana_ramp && <ManaCurveChart data={data.mana_ramp} />}
         {activeTab === 'goldfish' && data?.goldfish && <GoldfishSim data={data.goldfish} />}
-        {activeTab === 'interactions' && data?.interactions && <InteractionBreakdown data={data.interactions} />}
+        {activeTab === 'interactions' && <InteractionBreakdown data={data?.interactions} categories={data?.categories?.categories} />}
         {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} />}
         {activeTab === 'debug' && <DebugPanel cards={cards} analysis={data} />}
       </div>

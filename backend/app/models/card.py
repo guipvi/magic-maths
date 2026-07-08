@@ -49,6 +49,7 @@ class Card(db.Model):
 
     def to_light_dict(self):
         return {
+            'id': self.id,
             'oracle_id': self.oracle_id,
             'name': self.name,
             'cmc': self.cmc,

@@ -1,12 +1,20 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.deck import Deck, DeckCard
 from app.models.card import Card
-from app.services.mana_ramp import analyze_mana_ramp, classify_card
+from app.models.category import Category, DeckCardCategory, DeckCategoryTrigger, DeckCardTrigger
+from app.services.mana_ramp import analyze_mana_ramp
 from app.services.goldfish import simulate_goldfish
-from app.services.interactions import analyze_interactions
+from app.services.interactions import analyze_interactions_from_assignments
 from app.services.land_rec import recommend_lands
+from app.services.category_analysis import analyze_categories
+from app.services.category_service import get_all_categories
+
+
+def _run_with_app_context(app, fn, *args, **kwargs):
+    with app.app_context():
+        return fn(*args, **kwargs)
 
 analysis_bp = Blueprint('analysis', __name__)
 
@@ -40,6 +48,65 @@ def _cards_from_payload(data):
     return result
 
 
+def _load_assignments(deck_id, cards):
+    """Load category assignments for a deck, expanded by card quantity."""
+    assn_raw = DeckCardCategory.query.filter_by(deck_id=deck_id).all()
+    card_counts = {}
+    for c in cards:
+        cid = c.get('id')
+        card_counts[cid] = card_counts.get(cid, 0) + 1
+    assignments = []
+    for a in assn_raw:
+        for _ in range(card_counts.get(a.card_id, 1)):
+            assignments.append({
+                'card_id': a.card_id,
+                'category_id': a.category_id,
+                'multiplier': a.multiplier,
+                'mana_amount': a.mana_amount,
+                'same_turn': a.same_turn,
+                'is_permanent': a.is_permanent,
+                'max_per_turn': a.max_per_turn,
+            })
+    return assignments
+
+
+def _load_category_data(deck_id, cards):
+    """Load categories, triggers, and card_triggers for a deck."""
+    all_cats = get_all_categories()
+    cat_list = [c.to_dict() for c in all_cats]
+
+    trig_raw = DeckCategoryTrigger.query.filter_by(deck_id=deck_id).all()
+    card_trig_raw = DeckCardTrigger.query.filter_by(deck_id=deck_id).all()
+
+    triggers = [{
+        'source_category_id': t.source_category_id,
+        'target_category_id': t.target_category_id,
+        'trigger_count': t.trigger_count,
+        'accumulate': t.accumulate,
+    } for t in trig_raw]
+
+    card_counts = {}
+    for c in cards:
+        cid = c.get('id')
+        card_counts[cid] = card_counts.get(cid, 0) + 1
+
+    card_triggers = []
+    for ct in card_trig_raw:
+        if ct.source_assignment:
+            src_cat_id = ct.source_assignment.category_id
+            card_id = ct.source_assignment.card_id
+            qty = card_counts.get(card_id, 1)
+            card_triggers.append({
+                'source_category_id': src_cat_id,
+                'target_category_id': ct.target_category_id,
+                'trigger_count': ct.trigger_count,
+                'quantity': qty,
+                'per_turn': ct.per_turn,
+            })
+
+    return cat_list, triggers, card_triggers
+
+
 @analysis_bp.route('/mana-ramp', methods=['POST'])
 @jwt_required()
 def mana_ramp():
@@ -48,10 +115,16 @@ def mana_ramp():
     if not data:
         return jsonify({'error': 'No data'}), 400
 
+    assignments = None
+    categories = None
+    triggers = None
+    card_triggers = None
     if data.get('deck_id'):
         _, cards = _get_deck_cards(data['deck_id'], user_id)
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
+        assignments = _load_assignments(data['deck_id'], cards)
+        categories, triggers, card_triggers = _load_category_data(data['deck_id'], cards)
     elif data.get('cards'):
         cards = _cards_from_payload(data)
     else:
@@ -60,7 +133,9 @@ def mana_ramp():
     if not cards:
         return jsonify({'error': 'No cards found'}), 400
 
-    result = analyze_mana_ramp(cards, deck_size=len(cards))
+    result = analyze_mana_ramp(cards, deck_size=len(cards), assignments=assignments,
+                                categories=categories, triggers=triggers,
+                                card_triggers=card_triggers)
     return jsonify(result)
 
 
@@ -72,10 +147,16 @@ def goldfish():
     if not data:
         return jsonify({'error': 'No data'}), 400
 
+    assignments = None
+    categories = None
+    triggers = None
+    card_triggers = None
     if data.get('deck_id'):
         _, cards = _get_deck_cards(data['deck_id'], user_id)
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
+        assignments = _load_assignments(data['deck_id'], cards)
+        categories, triggers, card_triggers = _load_category_data(data['deck_id'], cards)
     elif data.get('cards'):
         cards = _cards_from_payload(data)
     else:
@@ -85,7 +166,9 @@ def goldfish():
         return jsonify({'error': 'No cards found'}), 400
 
     sim_count = data.get('simulations', 2000)
-    result = simulate_goldfish(cards, deck_size=len(cards), simulations=sim_count)
+    result = simulate_goldfish(cards, deck_size=len(cards), simulations=sim_count,
+                                assignments=assignments, categories=categories,
+                                triggers=triggers, card_triggers=card_triggers)
     return jsonify(result)
 
 
@@ -98,18 +181,27 @@ def interactions():
         return jsonify({'error': 'No data'}), 400
 
     if data.get('deck_id'):
-        _, cards = _get_deck_cards(data['deck_id'], user_id)
+        deck, cards = _get_deck_cards(data['deck_id'], user_id)
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
+        result = analyze_interactions_from_assignments(data['deck_id'], cards)
     elif data.get('cards'):
         cards = _cards_from_payload(data)
+        result = {
+            'total_interaction_spells': 0,
+            'breakdown': {a: {'total': 0, 'by_target': {}} for a in
+                          ['destroy', 'exile', 'bounce', 'counter', 'damage', 'graveyard', 'tuck']},
+            'spells': [],
+            'total_removal': 0,
+            'total_counterspells': 0,
+            'total_graveyard_hate': 0,
+        }
     else:
         return jsonify({'error': 'deck_id or cards required'}), 400
 
     if not cards:
         return jsonify({'error': 'No cards found'}), 400
 
-    result = analyze_interactions(cards)
     return jsonify(result)
 
 
@@ -121,10 +213,12 @@ def land_recommendation():
     if not data:
         return jsonify({'error': 'No data'}), 400
 
+    assignments = None
     if data.get('deck_id'):
-        _, cards = _get_deck_cards(data['deck_id'], user_id)
+        deck, cards = _get_deck_cards(data['deck_id'], user_id)
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
+        assignments = _load_assignments(data['deck_id'], cards)
     elif data.get('cards'):
         cards = _cards_from_payload(data)
     else:
@@ -133,7 +227,7 @@ def land_recommendation():
     if not cards:
         return jsonify({'error': 'No cards found'}), 400
 
-    result = recommend_lands(cards, deck_size=len(cards))
+    result = recommend_lands(cards, deck_size=len(cards), assignments=assignments)
     return jsonify(result)
 
 
@@ -150,9 +244,11 @@ def full_analysis():
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
         deck_info = deck.to_dict()
+        deck_id = data['deck_id']
     elif data.get('cards'):
         cards = _cards_from_payload(data)
         deck_info = None
+        deck_id = None
     else:
         return jsonify({'error': 'deck_id or cards required'}), 400
 
@@ -161,16 +257,43 @@ def full_analysis():
 
     from concurrent.futures import ThreadPoolExecutor
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        mana_future = pool.submit(analyze_mana_ramp, cards, len(cards))
-        gold_future = pool.submit(simulate_goldfish, cards, len(cards), 1000)
-        int_future = pool.submit(analyze_interactions, cards)
-        land_future = pool.submit(recommend_lands, cards, len(cards))
+    assignments = _load_assignments(deck_id, cards) if deck_id else None
+    cat_list = None
+    triggers = None
+    card_triggers = None
+    if deck_id:
+        cat_list, triggers, card_triggers = _load_category_data(deck_id, cards)
+
+    app = current_app._get_current_object()
+
+    with ThreadPoolExecutor(max_workers=5) as pool:
+        mana_future = pool.submit(
+            _run_with_app_context, app, analyze_mana_ramp, cards, len(cards), 5000,
+            assignments, cat_list, triggers, card_triggers)
+        gold_future = pool.submit(
+            _run_with_app_context, app, simulate_goldfish, cards, len(cards), 1000,
+            assignments, cat_list, triggers, card_triggers)
+        land_future = pool.submit(
+            _run_with_app_context, app, recommend_lands, cards, len(cards), assignments)
+
+        if deck_id:
+            int_future = pool.submit(
+                _run_with_app_context, app, analyze_interactions_from_assignments, deck_id, cards)
+        else:
+            int_future = None
+
+        if cat_list and assignments:
+            cat_future = pool.submit(
+                _run_with_app_context, app, analyze_categories, len(cards), cat_list,
+                assignments, triggers, card_triggers=card_triggers)
+        else:
+            cat_future = None
 
         mana_result = mana_future.result()
         gold_result = gold_future.result()
-        int_result = int_future.result()
+        int_result = int_future.result() if int_future else None
         land_result = land_future.result()
+        cat_result = cat_future.result() if cat_future else None
 
     return jsonify({
         'deck': deck_info,
@@ -178,19 +301,89 @@ def full_analysis():
         'goldfish': gold_result,
         'interactions': int_result,
         'land_recommendation': land_result,
+        'categories': cat_result,
     })
 
 
-@analysis_bp.route('/classify-card', methods=['POST'])
+@analysis_bp.route('/categories', methods=['POST'])
 @jwt_required()
-def classify_card_endpoint():
+def categories_analysis():
+    user_id = get_jwt_identity()
     data = request.get_json()
-    if not data or not data.get('oracle_text'):
-        return jsonify({'error': 'oracle_text required'}), 400
-    result = classify_card({
-        'name': data.get('name', ''),
-        'type_line': data.get('type_line', ''),
-        'oracle_text': data.get('oracle_text', ''),
-        'cmc': data.get('cmc', 0),
-    })
+    if not data:
+        return jsonify({'error': 'No data'}), 400
+
+    if data.get('deck_id'):
+        deck, cards = _get_deck_cards(data['deck_id'], user_id)
+        if cards is None:
+            return jsonify({'error': 'Deck not found'}), 404
+        deck_id = data['deck_id']
+    elif data.get('cards'):
+        cards = _cards_from_payload(data)
+        deck_id = None
+    else:
+        return jsonify({'error': 'deck_id or cards required'}), 400
+
+    if not cards:
+        return jsonify({'error': 'No cards found'}), 400
+
+    deck_size = len(cards)
+    all_categories = get_all_categories()
+    cat_list = [c.to_dict() for c in all_categories]
+
+    if deck_id:
+        assignments_raw = DeckCardCategory.query.filter_by(deck_id=deck_id).all()
+        triggers_raw = DeckCategoryTrigger.query.filter_by(deck_id=deck_id).all()
+        card_triggers_raw = DeckCardTrigger.query.filter_by(deck_id=deck_id).all()
+    else:
+        assignments_raw = []
+        triggers_raw = []
+        card_triggers_raw = []
+
+    assignments = []
+    card_counts = {}
+    card_map = {}
+    for c in cards:
+        cid = c.get('id')
+        if cid not in card_counts:
+            card_counts[cid] = 0
+            card_map[cid] = c
+        card_counts[cid] += 1
+
+    for a in assignments_raw:
+        for _ in range(card_counts.get(a.card_id, 1)):
+            assignments.append({
+                'card_id': a.card_id,
+                'category_id': a.category_id,
+                'multiplier': a.multiplier,
+                'mana_amount': a.mana_amount,
+                'same_turn': a.same_turn,
+                'is_permanent': a.is_permanent,
+                'max_per_turn': a.max_per_turn,
+            })
+
+    triggers = [{
+        'source_category_id': t.source_category_id,
+        'target_category_id': t.target_category_id,
+        'trigger_count': t.trigger_count,
+        'accumulate': t.accumulate,
+    } for t in triggers_raw]
+
+    card_triggers = []
+    for ct in card_triggers_raw:
+        if ct.source_assignment:
+            src_cat_id = ct.source_assignment.category_id
+            card_id = ct.source_assignment.card_id
+            qty = card_counts.get(card_id, 1)
+            card_triggers.append({
+                'source_category_id': src_cat_id,
+                'target_category_id': ct.target_category_id,
+                'trigger_count': ct.trigger_count,
+                'quantity': qty,
+                'per_turn': ct.per_turn,
+            })
+
+    max_turns = data.get('max_turns', 10)
+    result = analyze_categories(deck_size, cat_list, assignments, triggers, max_turns,
+                                card_triggers=card_triggers)
     return jsonify(result)
