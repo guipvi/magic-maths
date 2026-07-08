@@ -317,7 +317,3 @@ magic-maths/
 ```
 
 ---
-
-## Licença
-
-MIT

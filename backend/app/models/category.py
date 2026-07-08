@@ -37,8 +37,10 @@ class DeckCardCategory(db.Model):
     same_turn = db.Column(db.Boolean, nullable=True)
     is_permanent = db.Column(db.Boolean, nullable=True)
     max_per_turn = db.Column(db.Integer, nullable=True)
+    tutored_card_id = db.Column(db.Integer, db.ForeignKey('cards.id'), nullable=True)
 
-    card = db.relationship('Card', backref='category_assignments')
+    card = db.relationship('Card', backref='category_assignments', foreign_keys=[card_id])
+    tutored_card = db.relationship('Card', foreign_keys=[tutored_card_id])
 
     __table_args__ = (
         db.UniqueConstraint('deck_id', 'card_id', 'category_id', name='uq_deck_card_category'),
@@ -58,6 +60,8 @@ class DeckCardCategory(db.Model):
             'same_turn': self.same_turn,
             'is_permanent': self.is_permanent,
             'max_per_turn': self.max_per_turn,
+            'tutored_card_id': self.tutored_card_id,
+            'tutored_card_name': self.tutored_card.name if self.tutored_card else None,
         }
 
 

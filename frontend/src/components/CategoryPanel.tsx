@@ -158,6 +158,9 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
 
   const cat = categories.find(c => c.id === selectedCategory)
   const isRamp = cat?.config?.type === 'ramp'
+  const isTutor = cat?.config?.type === 'tutor'
+
+  const [tutoredCard, setTutoredCard] = useState<number | ''>('')
 
   const handleAssign = async () => {
     if (selectedCard === '' || selectedCategory === '') return
@@ -169,6 +172,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
       same_turn: isRamp ? sameTurn : null,
       is_permanent: isRamp ? isPermanent : null,
       max_per_turn: maxPerTurn === '' ? null : Number(maxPerTurn),
+      tutored_card_id: isTutor ? (tutoredCard === '' ? null : Number(tutoredCard)) : null,
     })
     onRefresh()
     setSelectedCard('')
@@ -178,6 +182,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
     setSameTurn(false)
     setIsPermanent(true)
     setMaxPerTurn('')
+    setTutoredCard('')
   }
 
   const handleRemove = async (assnId: number) => {
@@ -218,7 +223,15 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
               <option key={cat.id} value={cat.id}>{cat.name}</option>
             ))}
           </select>
-          {isRamp ? (
+          {isTutor ? (
+            <select value={tutoredCard} onChange={e => setTutoredCard(Number(e.target.value))}
+              className="input">
+              <option value="">Selecionar carta tutoriada...</option>
+              {cards.filter((c: any) => c.card_id !== selectedCard).map((c: any, i: number) => (
+                <option key={i} value={c.card_id}>{c.card?.name}</option>
+              ))}
+            </select>
+          ) : isRamp ? (
             <input type="number" value={manaAmount} min={0}
               onChange={e => setManaAmount(e.target.value === '' ? '' : Number(e.target.value))}
               placeholder="Mana gerada" className="input" />
@@ -260,6 +273,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
               <th className="text-right py-2 px-2">Mana</th>
               <th className="text-center py-2 px-2">Turno</th>
               <th className="text-center py-2 px-2">Tipo</th>
+              <th className="text-left py-2 px-2">Tutoria</th>
               <th className="py-2 px-2"></th>
             </tr>
           </thead>
@@ -299,6 +313,9 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
                 <td className="py-2 px-2 text-center">{a.same_turn ? 'Sim' : a.same_turn === false ? 'Não' : '-'}</td>
                 <td className="py-2 px-2 text-center">
                   {a.is_permanent ? 'Perm' : a.is_permanent === false ? 'Ritual' : '-'}
+                </td>
+                <td className="py-2 px-2 text-left text-sm">
+                  {a.tutored_card_name || '-'}
                 </td>
                 <td className="py-2 px-2 text-right">
                   <button onClick={() => handleRemove(a.id)}

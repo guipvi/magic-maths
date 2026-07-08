@@ -91,6 +91,7 @@ export const categories = {
     card_id: number; category_id: number; multiplier?: number;
     mana_amount?: number | null; same_turn?: boolean | null;
     is_permanent?: boolean | null; max_per_turn?: number | null;
+    tutored_card_id?: number | null;
   }) => api.post(`/categories/deck/${deckId}/assignments`, data),
   removeAssignment: (deckId: string, assignmentId: number) =>
     api.delete(`/categories/deck/${deckId}/assignments/${assignmentId}`),
@@ -110,6 +111,17 @@ export const categories = {
   }) => api.post(`/categories/deck/${deckId}/card-triggers`, data),
   removeCardTrigger: (deckId: string, triggerId: number) =>
     api.delete(`/categories/deck/${deckId}/card-triggers/${triggerId}`),
+};
+
+export const commander = {
+  getConfig: (deckId: string) => api.get(`/decks/${deckId}/commander`),
+  saveConfig: (deckId: string, data: {
+    card_id: number;
+    card_name?: string;
+    mana_left_over?: number;
+    min_category_requirements?: { category_id: number; count: number }[];
+  }) => api.put(`/decks/${deckId}/commander`, data),
+  deleteConfig: (deckId: string) => api.delete(`/decks/${deckId}/commander`),
 };
 
 export const scryfall = {

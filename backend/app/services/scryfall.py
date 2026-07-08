@@ -201,6 +201,83 @@ def fetch_or_get_card(name_or_id):
     return card
 
 
+def _scryfall_post(endpoint, json_body):
+    url = f'{SCRYFALL_API}{endpoint}'
+    session = _get_session()
+
+    with _rate_limit_lock:
+        global _last_request_time
+        elapsed = time.time() - _last_request_time
+        if elapsed < MIN_REQUEST_INTERVAL:
+            time.sleep(MIN_REQUEST_INTERVAL - elapsed)
+        _last_request_time = time.time()
+
+    try:
+        resp = session.post(url, json=json_body, timeout=(5, 30))
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as e:
+        logger.warning(f'Scryfall POST failed: {url} - {e}')
+        return None
+
+
+def fetch_or_get_cards_bulk(names):
+    if not names:
+        return {}
+
+    results = {}
+    uncached = []
+
+    for name in names:
+        if not name:
+            continue
+        cache_key = name.strip().lower()
+        if cache_key in _fetch_cache:
+            results[name] = _fetch_cache[cache_key]
+            continue
+
+        card = Card.query.filter(Card.name.ilike(name.strip())).first()
+        if card:
+            _fetch_cache[cache_key] = card
+            _fetch_cache[card.oracle_id] = card
+            results[name] = card
+        else:
+            uncached.append(name.strip())
+
+    if not uncached:
+        return results
+
+    for i in range(0, len(uncached), 75):
+        batch = uncached[i:i+75]
+        data = _scryfall_post('/cards/collection', {
+            "identifiers": [{"name": n} for n in batch]
+        })
+        if data and data.get('data'):
+            for card_data in data['data']:
+                card = _card_from_scryfall(card_data)
+                if card:
+                    db.session.add(card)
+                    _fetch_cache[card.name.lower()] = card
+                    _fetch_cache[card.oracle_id] = card
+
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+    for name in uncached:
+        lower = name.lower()
+        card = _fetch_cache.get(lower)
+        if card:
+            results[name] = card
+        else:
+            card = fetch_or_get_card(name)
+            if card:
+                results[name] = card
+
+    return results
+
+
 def search_cards(query, page=1):
     params = {
         'q': query,

@@ -23,6 +23,8 @@ DEFAULT_CATEGORIES = [
      'config': {'type': 'interaction', 'description': 'Hate ao cemitério'}},
     {'name': 'tuck', 'color': '#fbbf24',
      'config': {'type': 'interaction', 'description': 'Coloca no fundo do grimório'}},
+    {'name': 'tutor', 'color': '#ec4899',
+     'config': {'type': 'tutor', 'description': 'Busca carta do grimório'}},
 ]
 
 
@@ -86,7 +88,7 @@ def get_deck_assignments(deck_id):
 
 def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
                         mana_amount=None, same_turn=None, is_permanent=None,
-                        max_per_turn=None):
+                        max_per_turn=None, tutored_card_id=None):
     existing = (DeckCardCategory.query
                 .filter_by(deck_id=deck_id, card_id=card_id,
                            category_id=category_id)
@@ -97,12 +99,13 @@ def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
         existing.same_turn = same_turn
         existing.is_permanent = is_permanent
         existing.max_per_turn = max_per_turn
+        existing.tutored_card_id = tutored_card_id
     else:
         assn = DeckCardCategory(
             deck_id=deck_id, card_id=card_id, category_id=category_id,
             multiplier=multiplier, mana_amount=mana_amount,
             same_turn=same_turn, is_permanent=is_permanent,
-            max_per_turn=max_per_turn,
+            max_per_turn=max_per_turn, tutored_card_id=tutored_card_id,
         )
         db.session.add(assn)
     db.session.commit()

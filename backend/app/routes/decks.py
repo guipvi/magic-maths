@@ -3,8 +3,7 @@ from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
 from app.models.deck import Deck, DeckCard
-from app.models.card import Card
-from app.services.scryfall import fetch_or_get_card
+from app.services.scryfall import fetch_or_get_card, fetch_or_get_cards_bulk
 from app.utils.card_parser import parse_decklist
 
 logger = logging.getLogger(__name__)
@@ -38,15 +37,26 @@ def create_deck():
     if not data or not data.get('name'):
         return jsonify({'error': 'Deck name is required'}), 400
 
-    # resolve all cards first, outside the deck transaction
     cards_data = data.get('cards', [])
+    names = [item['name'] for item in cards_data if 'name' in item]
+    oracle_ids = [item['oracle_id'] for item in cards_data if 'oracle_id' in item]
+
+    card_map = {}
+    if names:
+        card_map.update(fetch_or_get_cards_bulk(names))
+    for oid in oracle_ids:
+        card = fetch_or_get_card(oid)
+        if card:
+            card_map[oid] = card
+
     resolved_cards = []
     for item in cards_data:
-        card = fetch_or_get_card(item.get('name') or item.get('oracle_id'))
+        key = item.get('name') or item.get('oracle_id')
+        card = card_map.get(key)
         if card:
             resolved_cards.append((card, item))
         else:
-            logger.warning(f'Card not found (skipping): {item.get("name")}')
+            logger.warning(f'Card not found (skipping): {item.get("name", item.get("oracle_id"))}')
 
     deck = Deck(
         user_id=user_id,
@@ -86,41 +96,37 @@ def import_deck():
 
     parsed = parse_decklist(data['decklist'])
 
-    # resolve all cards first, outside the deck transaction
-    mainboard = {}
+    all_names = list(set(
+        [e['name'] for e in parsed['mainboard']] +
+        [e['name'] for e in parsed['sideboard']]
+    ))
+    card_map = fetch_or_get_cards_bulk(all_names)
+
+    merged_main = {}
     for entry in parsed['mainboard']:
         name = entry['name']
-        if name in mainboard:
-            mainboard[name]['quantity'] += entry['quantity']
-            mainboard[name]['is_commander'] = mainboard[name]['is_commander'] or entry.get('is_commander', False)
+        card = card_map.get(name)
+        if not card:
+            logger.warning(f'Card not found (skipping): {name}')
+            continue
+        if name in merged_main:
+            merged_main[name]['quantity'] += entry['quantity']
+            merged_main[name]['is_commander'] = merged_main[name]['is_commander'] or entry.get('is_commander', False)
         else:
-            mainboard[name] = entry.copy()
+            merged_main[name] = entry.copy()
 
-    resolved_main = []
-    for entry in mainboard.values():
-        card = fetch_or_get_card(entry['name'])
-        if card:
-            resolved_main.append((card, entry))
-        else:
-            logger.warning(f'Card not found (skipping): {entry["name"]}')
-
-    sideboard = {}
+    merged_side = {}
     for entry in parsed['sideboard']:
         name = entry['name']
-        if name in sideboard:
-            sideboard[name]['quantity'] += entry['quantity']
+        card = card_map.get(name)
+        if not card:
+            logger.warning(f'Card not found (skipping): {name}')
+            continue
+        if name in merged_side:
+            merged_side[name]['quantity'] += entry['quantity']
         else:
-            sideboard[name] = entry.copy()
+            merged_side[name] = entry.copy()
 
-    resolved_side = []
-    for entry in sideboard.values():
-        card = fetch_or_get_card(entry['name'])
-        if card:
-            resolved_side.append((card, entry))
-        else:
-            logger.warning(f'Card not found (skipping): {entry["name"]}')
-
-    # now create deck and deck cards in a single transaction
     deck = Deck(
         user_id=user_id,
         name=data.get('name', parsed.get('name', 'Imported Deck')),
@@ -129,7 +135,8 @@ def import_deck():
     db.session.add(deck)
     db.session.flush()
 
-    for card, entry in resolved_main:
+    for entry in merged_main.values():
+        card = card_map[entry['name']]
         dc = DeckCard(
             deck_id=deck.id,
             card_id=card.id,
@@ -138,7 +145,8 @@ def import_deck():
         )
         db.session.add(dc)
 
-    for card, entry in resolved_side:
+    for entry in merged_side.values():
+        card = card_map[entry['name']]
         dc = DeckCard(
             deck_id=deck.id,
             card_id=card.id,
@@ -174,14 +182,26 @@ def update_deck(deck_id):
         deck.is_public = data['is_public']
 
     if 'cards' in data:
-        # resolve all cards first, outside the deck transaction
+        cards_data = data['cards']
+        names = [item['name'] for item in cards_data if 'name' in item]
+        oracle_ids = [item['oracle_id'] for item in cards_data if 'oracle_id' in item]
+
+        card_map = {}
+        if names:
+            card_map.update(fetch_or_get_cards_bulk(names))
+        for oid in oracle_ids:
+            card = fetch_or_get_card(oid)
+            if card:
+                card_map[oid] = card
+
         resolved_cards = []
-        for item in data['cards']:
-            card = fetch_or_get_card(item.get('name') or item.get('oracle_id'))
+        for item in cards_data:
+            key = item.get('name') or item.get('oracle_id')
+            card = card_map.get(key)
             if card:
                 resolved_cards.append((card, item))
             else:
-                logger.warning(f'Card not found (skipping): {item.get("name")}')
+                logger.warning(f'Card not found (skipping): {item.get("name", item.get("oracle_id"))}')
 
         DeckCard.query.filter_by(deck_id=deck.id, is_sideboard=False).delete()
         for card, item in resolved_cards:
