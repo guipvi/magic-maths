@@ -18,12 +18,14 @@ def create_app(config_class=Config):
     from app.routes.collection import collection_bp
     from app.routes.analysis import analysis_bp
     from app.routes.categories import categories_bp
+    from app.routes.commander import commander_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(decks_bp, url_prefix='/api/decks')
     app.register_blueprint(collection_bp, url_prefix='/api/collection')
     app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
     app.register_blueprint(categories_bp, url_prefix='/api/categories')
+    app.register_blueprint(commander_bp, url_prefix='/api/decks')
 
     # ensure tables exist and seed default categories
     with app.app_context():
@@ -38,6 +40,16 @@ def create_app(config_class=Config):
                 cursor.close()
 
         db.create_all()
+
+        from sqlalchemy import inspect
+        insp = inspect(db.engine)
+        cols = [c['name'] for c in insp.get_columns('deck_card_categories')]
+        if 'tutored_card_id' not in cols:
+            db.session.execute(db.text(
+                "ALTER TABLE deck_card_categories ADD COLUMN tutored_card_id INTEGER REFERENCES cards(id)"
+            ))
+            db.session.commit()
+
         from app.services.category_service import seed_default_categories
         seed_default_categories()
 

@@ -101,6 +101,7 @@ def add_assignment(deck_id):
         same_turn=data.get('same_turn'),
         is_permanent=data.get('is_permanent'),
         max_per_turn=data.get('max_per_turn'),
+        tutored_card_id=data.get('tutored_card_id'),
     )
     return jsonify(assn.to_dict()), 201
 

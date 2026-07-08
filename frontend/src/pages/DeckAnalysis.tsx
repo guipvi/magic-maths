@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { decks, analysis } from '../services/api'
-import { Shield, Map, Bug, Tags, BarChart3, TrendingUp, Loader2 } from 'lucide-react'
+import { Shield, Map, Bug, Tags, BarChart3, TrendingUp, Crown, Loader2 } from 'lucide-react'
 import InteractionBreakdown from '../components/InteractionBreakdown'
 import LandRecommender from '../components/LandRecommender'
 import DebugPanel from '../components/DebugPanel'
@@ -9,6 +9,7 @@ import CategoryPanel from '../components/CategoryPanel'
 import CategoryChart from '../components/CategoryChart'
 import ManaCurveChart from '../components/ManaCurveChart'
 import GoldfishSim from '../components/GoldfishSim'
+import CommanderConfig from '../components/CommanderConfig'
 
 interface AnalysisData {
   interactions: any
@@ -16,6 +17,7 @@ interface AnalysisData {
   categories: any
   mana_ramp: any
   goldfish: any
+  commander: any
 }
 
 export default function DeckAnalysis() {
@@ -62,6 +64,7 @@ export default function DeckAnalysis() {
     { id: 'categories', label: 'Categorias', icon: Tags },
     { id: 'mana', label: 'Mana', icon: BarChart3 },
     { id: 'goldfish', label: 'Goldfish', icon: TrendingUp },
+    { id: 'commander', label: 'Commander', icon: Crown },
     { id: 'interactions', label: 'Interações', icon: Shield },
     { id: 'lands', label: 'Terrenos', icon: Map },
     { id: 'debug', label: 'Debug', icon: Bug },
@@ -105,6 +108,7 @@ export default function DeckAnalysis() {
         )}
         {activeTab === 'mana' && data?.mana_ramp && <ManaCurveChart data={data.mana_ramp} />}
         {activeTab === 'goldfish' && data?.goldfish && <GoldfishSim data={data.goldfish} />}
+        {activeTab === 'commander' && id && <CommanderConfig deckId={id} cards={cards} commanderAnalysis={data?.commander} />}
         {activeTab === 'interactions' && <InteractionBreakdown data={data?.interactions} categories={data?.categories?.categories} />}
         {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} />}
         {activeTab === 'debug' && <DebugPanel cards={cards} analysis={data} />}

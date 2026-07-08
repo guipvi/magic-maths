@@ -141,8 +141,10 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
             ramp_contributions[cat['name']] = round(expected, 2)
             total_ramp_mana += expected
 
-        mana_from_lands = round(lands_in_play, 2)
+        mana_from_lands = round(float(lands_in_play), 2)
         total_mana = round(mana_from_lands + total_ramp_mana, 2)
+        total_mana = float(total_mana)
+        mana_from_lands = float(mana_from_lands)
 
         p_land_drop = 1.0
         if land_count > 0:
@@ -165,12 +167,12 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
         results[turn] = {
             'turn': turn,
             'cards_drawn': cards_drawn_by_turn,
-            'expected_lands_in_play': lands_in_play,
+            'expected_lands_in_play': round(float(lands_in_play), 2),
             'mana_from_lands': mana_from_lands,
             'ramp_contributions': ramp_contributions,
-            'total_ramp_mana': round(total_ramp_mana, 2),
+            'total_ramp_mana': round(float(total_ramp_mana), 2),
             'total_expected_mana': total_mana,
-            'prob_hitting_land_drop': round(p_land_drop, 3),
+            'prob_hitting_land_drop': round(float(p_land_drop), 3),
             'categories': cat_breakdown,
         }
 
@@ -183,13 +185,21 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
         'ramp_breakdown': ramp_breakdown,
         'draw_breakdown': draw_breakdown,
         'alcance_breakdown': alcance_breakdown,
-        'category_summary': cat_result['categories'],
         'by_turn': results,
     }
 
 
-def _analyze_mana_from_cat_result(deck_size, land_count, avg_cmc, categories, cat_result):
-    ramp_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'ramp'}
+def analyze_deck_mana_fast(deck_size, land_count, categories, cat_result, ramp_cats=None):
+    """Simplified version using only hypergeometric approximations."""
+    if ramp_cats is None:
+        ramp_cats = {}
+    from .mana_ramp import _hypergeom_prob, _hypergeom_cdf  # noqa: F811
+
+    deck_size = int(deck_size)
+    land_count = int(land_count)
+
+    avg_cmc = sum(s['avg_cmc'] * s['cards_assigned'] for s in cat_result['categories']) / max(sum(s['cards_assigned'] for s in cat_result['categories']), 1)
+
     draw_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'draw'}
     alcance_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'alcance'}
 
@@ -216,9 +226,19 @@ def _analyze_mana_from_cat_result(deck_size, land_count, avg_cmc, categories, ca
     for turn in range(1, 11):
         cards_drawn_by_turn = min(7 + (turn - 1), deck_size)
 
+        expected_draw_cards = 0.0
+        for cid in draw_cats:
+            entry = cat_result['by_turn'].get(turn, {}).get('categories', {}).get(cid, {})
+            expected_draw_cards += entry.get('total_expected', 0)
+
+        # Approximate extra draws by turn
+        extra_draws = expected_draw_cards * 2  # rough estimate: each draw spell ~2 cards
+
+        adjusted_drawn = min(cards_drawn_by_turn + extra_draws, deck_size)
+
         prob_lands = []
-        for k in range(0, min(land_count, cards_drawn_by_turn) + 1):
-            prob_lands.append(_hypergeom_prob(deck_size, land_count, cards_drawn_by_turn, k))
+        for k in range(0, min(land_count, int(adjusted_drawn)) + 1):
+            prob_lands.append(_hypergeom_prob(deck_size, land_count, int(adjusted_drawn), k))
 
         expected_lands = sum(k * p for k, p in enumerate(prob_lands))
         lands_in_play = min(expected_lands, turn)
@@ -234,8 +254,10 @@ def _analyze_mana_from_cat_result(deck_size, land_count, avg_cmc, categories, ca
             ramp_contributions[cat['name']] = round(expected, 2)
             total_ramp_mana += expected
 
-        mana_from_lands = round(lands_in_play, 2)
+        mana_from_lands = round(float(lands_in_play), 2)
         total_mana = round(mana_from_lands + total_ramp_mana, 2)
+        total_mana = float(total_mana)
+        mana_from_lands = float(mana_from_lands)
 
         p_land_drop = 1.0
         if land_count > 0:
@@ -258,12 +280,12 @@ def _analyze_mana_from_cat_result(deck_size, land_count, avg_cmc, categories, ca
         results[turn] = {
             'turn': turn,
             'cards_drawn': cards_drawn_by_turn,
-            'expected_lands_in_play': lands_in_play,
+            'expected_lands_in_play': round(float(lands_in_play), 2),
             'mana_from_lands': mana_from_lands,
             'ramp_contributions': ramp_contributions,
-            'total_ramp_mana': round(total_ramp_mana, 2),
+            'total_ramp_mana': round(float(total_ramp_mana), 2),
             'total_expected_mana': total_mana,
-            'prob_hitting_land_drop': round(p_land_drop, 3),
+            'prob_hitting_land_drop': round(float(p_land_drop), 3),
             'categories': cat_breakdown,
         }
 

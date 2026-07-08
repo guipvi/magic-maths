@@ -63,3 +63,31 @@ class DeckCard(db.Model):
             'is_commander': self.is_commander,
             'is_sideboard': self.is_sideboard,
         }
+
+
+class DeckCommanderConfig(db.Model):
+    __tablename__ = 'deck_commander_config'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False, unique=True)
+    card_id = db.Column(db.Integer, db.ForeignKey('cards.id'), nullable=False)
+    mana_left_over = db.Column(db.Integer, default=0)
+    min_category_requirements = db.Column(db.JSON, default=list)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
+                           onupdate=lambda: datetime.now(timezone.utc))
+
+    deck = db.relationship('Deck', backref=db.backref('commander_config', uselist=False))
+    card = db.relationship('Card')
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'deck_id': self.deck_id,
+            'card_id': self.card_id,
+            'card_name': self.card.name if self.card else None,
+            'card_cmc': self.card.cmc if self.card else None,
+            'card_image_uris': self.card.image_uris if self.card else None,
+            'mana_left_over': self.mana_left_over,
+            'min_category_requirements': self.min_category_requirements or [],
+        }

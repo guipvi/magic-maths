@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.extensions import db
-from app.models.deck import Deck, DeckCard
+from app.models.deck import Deck, DeckCard, DeckCommanderConfig
 from app.models.card import Card
 from app.models.category import Category, DeckCardCategory, DeckCategoryTrigger, DeckCardTrigger
 from app.services.mana_ramp import analyze_mana_ramp
@@ -10,6 +10,7 @@ from app.services.interactions import analyze_interactions_from_assignments
 from app.services.land_rec import recommend_lands
 from app.services.category_analysis import analyze_categories
 from app.services.category_service import get_all_categories
+from app.services.commander_analysis import analyze_commander_cast
 
 
 def _run_with_app_context(app, fn, *args, **kwargs):
@@ -295,6 +296,27 @@ def full_analysis():
         land_result = land_future.result()
         cat_result = cat_future.result() if cat_future else None
 
+    # Commander analysis (depends on mana and category results)
+    commander_result = None
+    if deck_id:
+        comm_config = DeckCommanderConfig.query.filter_by(deck_id=deck_id).first()
+        if comm_config and comm_config.card:
+            comm_cmc = comm_config.card.cmc or 0
+            land_count = len([c for c in cards if 'land' in (c.get('type_line') or '').lower()])
+
+            cat_assignments_for_comm = _load_assignments(deck_id, cards) if assignments else None
+
+            commander_result = analyze_commander_cast(
+                deck_size=len(cards),
+                commander_cmc=comm_cmc,
+                mana_left_over=comm_config.mana_left_over or 0,
+                min_category_requirements=comm_config.min_category_requirements or [],
+                land_count=land_count,
+                category_assignments=cat_assignments_for_comm,
+                category_analysis_by_turn=cat_result.get('by_turn') if cat_result else None,
+                mana_ramp_by_turn=mana_result.get('by_turn') if mana_result else None,
+            )
+
     return jsonify({
         'deck': deck_info,
         'mana_ramp': mana_result,
@@ -302,6 +324,7 @@ def full_analysis():
         'interactions': int_result,
         'land_recommendation': land_result,
         'categories': cat_result,
+        'commander': commander_result,
     })
 
 
