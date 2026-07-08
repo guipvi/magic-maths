@@ -79,6 +79,39 @@ export const analysis = {
     api.post('/analysis/full', data),
 };
 
+export const categories = {
+  list: () => api.get('/categories'),
+  create: (data: { name: string; color?: string; config?: any }) =>
+    api.post('/categories', data),
+  update: (id: number, data: any) => api.put(`/categories/${id}`, data),
+  delete: (id: number) => api.delete(`/categories/${id}`),
+  getAssignments: (deckId: string) =>
+    api.get(`/categories/deck/${deckId}/assignments`),
+  setAssignment: (deckId: string, data: {
+    card_id: number; category_id: number; multiplier?: number;
+    mana_amount?: number | null; same_turn?: boolean | null;
+    is_permanent?: boolean | null; max_per_turn?: number | null;
+  }) => api.post(`/categories/deck/${deckId}/assignments`, data),
+  removeAssignment: (deckId: string, assignmentId: number) =>
+    api.delete(`/categories/deck/${deckId}/assignments/${assignmentId}`),
+  getTriggers: (deckId: string) =>
+    api.get(`/categories/deck/${deckId}/triggers`),
+  setTrigger: (deckId: string, data: {
+    source_category_id: number; target_category_id: number;
+    trigger_count?: number; accumulate?: boolean;
+  }) => api.post(`/categories/deck/${deckId}/triggers`, data),
+  removeTrigger: (deckId: string, triggerId: number) =>
+    api.delete(`/categories/deck/${deckId}/triggers/${triggerId}`),
+  getCardTriggers: (deckId: string) =>
+    api.get(`/categories/deck/${deckId}/card-triggers`),
+  setCardTrigger: (deckId: string, data: {
+    source_assignment_id: number; target_category_id: number;
+    trigger_count?: number; per_turn?: (number | null)[] | null;
+  }) => api.post(`/categories/deck/${deckId}/card-triggers`, data),
+  removeCardTrigger: (deckId: string, triggerId: number) =>
+    api.delete(`/categories/deck/${deckId}/card-triggers/${triggerId}`),
+};
+
 export const scryfall = {
   search: (query: string) =>
     axios.get(`https://api.scryfall.com/cards/search?q=${encodeURIComponent(query)}&unique=prints`),

@@ -8,6 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -21,4 +22,4 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 5555
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5555", "run:app"]
+CMD ["gunicorn", "-w", "4", "-b", "0.0.0.0:5555", "--timeout", "120", "run:app"]

@@ -1,177 +1,109 @@
-"""
-Interaction Analyzer (Feature 3)
+"""Interaction Analyzer
 
-Scans each non-land card's oracle_text using regex patterns to detect
-and count interaction spells by type and target.
-
-Interaction categories detected:
-- destroy: destroy target [creature|artifact|enchantment|planeswalker|land]
-- exile: exile target [same subtype]
-- bounce: return to hand
-- counter: counter target spell
-- damage: deals damage to creature/any target
-- graveyard: graveyard hate/exile
-- tuck: put on bottom of library
-
-Each interaction is cross-referenced with its target type (creature,
-artifact, etc.) using keyword matching in the remaining oracle text.
-Duplicates (same action + same target per card) are de-duplicated.
+Interactions are now defined manually via category assignments.
+This service reads category assignments and derives interaction
+data from the categories marked as type 'interaction'.
 """
 
-import re
+from app.models.category import Category, DeckCardCategory
 
-INTERACTION_PATTERNS = [
-    ('destroy', [
-        r'destroy target creature',
-        r'destroy target artifact',
-        r'destroy target enchantment',
-        r'destroy target land',
-        r'destroy target planeswalker',
-        r'destroy target permanent',
-        r'destroy all creatures',
-        r'destroy all artifacts',
-        r'destroy all enchantments',
-    ]),
-    ('exile', [
-        r'exile target creature',
-        r'exile target artifact',
-        r'exile target enchantment',
-        r'exile target land',
-        r'exile target planeswalker',
-        r'exile target permanent',
-        r'exile all creatures',
-        r'exile all artifacts',
-        r'exile all enchantments',
-        r'exile target.*battle',
-    ]),
-    ('bounce', [
-        r'return target creature to (its owner\'s|owner\'s) hand',
-        r'return target permanent to (its owner\'s|owner\'s) hand',
-        r'return target nonland permanent',
-        r'return all creatures to',
-        r'return each creature to',
-    ]),
-    ('counter', [
-        r'counter target spell',
-        r'counter target creature spell',
-        r'counter target noncreature spell',
-        r'counter target instant spell',
-        r'counter target sorcery spell',
-        r'counter target activated ability',
-        r'counter target triggered ability',
-    ]),
-    ('damage', [
-        r'deals \d+ damage to target creature',
-        r'deals \d+ damage to any target',
-        r'deals \d+ damage to target.*creature',
-        r'deals X damage to target',
-    ]),
-    ('graveyard', [
-        r'exile target card from a graveyard',
-        r'exile all cards from.*graveyard',
-        r'exile target player\'s graveyard',
-        r'exile target graveyard',
-        r'target player exiles.*graveyard',
-    ]),
-    ('tuck', [
-        r'put target.*on (the )?bottom of (its owner\'s|owner\'s) library',
-        r'target.*library.*bottom',
-    ]),
+INTERACTION_ACTIONS = [
+    'destroy', 'exile', 'bounce', 'counter', 'damage', 'graveyard', 'tuck',
 ]
 
-TYPE_MAPPING = {
-    'creature': 'creature',
-    'artifact': 'artifact',
-    'enchantment': 'enchantment',
-    'planeswalker': 'planeswalker',
-    'land': 'land',
-    'battle': 'battle',
-    'instant': 'instant',
-    'sorcery': 'sorcery',
-}
 
+def analyze_interactions_from_assignments(deck_id, deck_cards):
+    """Analyze interactions based on manual category assignments."""
+    interaction_cats = Category.query.filter(
+        Category.config['type'].as_string() == 'interaction'
+    ).all()
 
-def _extract_target_type(text, pattern):
-    text_lower = text.lower()
-    for perm_type, keywords in [
-        ('creature', ['creature']),
-        ('artifact', ['artifact']),
-        ('enchantment', ['enchantment']),
-        ('planeswalker', ['planeswalker']),
-        ('land', ['land']),
-        ('battle', ['battle']),
-        ('permanent', ['permanent']),
-        ('nonland permanent', ['nonland permanent', 'nonland']),
-        ('spell', ['spell']),
-        ('graveyard', ['graveyard']),
-        ('any target', ['any target', 'any']),
-    ]:
-        for kw in keywords:
-            if kw in text_lower:
-                return perm_type
-    return 'generic'
+    cat_map = {c.id: c for c in interaction_cats}
+    cat_ids = list(cat_map.keys())
 
+    if not cat_ids:
+        return _empty_result()
 
-def analyze_interactions(deck_cards):
-    classified = []
+    assignments = DeckCardCategory.query.filter(
+        DeckCardCategory.deck_id == deck_id,
+        DeckCardCategory.category_id.in_(cat_ids),
+    ).all()
+
+    card_counts = {}
     for c in deck_cards:
-        tl = c.get('type_line', '')
-        ot = c.get('oracle_text', '') or ''
-        name = c.get('name', '')
+        cid = c.get('id')
+        card_counts[cid] = card_counts.get(cid, 0) + 1
 
-        if 'land' in tl.lower() and 'land' in (tl.lower().split('—')[0] if '—' in tl else tl.lower()):
+    spells = []
+    seen_card_cat = set()
+
+    card_assignments = {}
+    for a in assignments:
+        key = (a.card_id, a.category_id)
+        if key not in seen_card_cat:
+            seen_card_cat.add(key)
+            qty = card_counts.get(a.card_id, 1)
+            card_assignments[key] = qty
+        else:
+            card_assignments[key] = card_assignments.get(key, 0) + card_counts.get(a.card_id, 1)
+
+    for (card_id, cat_id), qty in card_assignments.items():
+        cat = cat_map.get(cat_id)
+        if not cat:
             continue
-
-        interactions = []
-
-        for action, patterns in INTERACTION_PATTERNS:
-            for pattern in patterns:
-                if re.search(pattern, ot, re.IGNORECASE):
-                    target_type = _extract_target_type(pattern, ot)
-                    interactions.append({
-                        'action': action,
-                        'target_type': target_type,
-                        'pattern_matched': pattern,
+        for c in deck_cards:
+            if c.get('id') == card_id:
+                for _ in range(qty):
+                    spells.append({
+                        'name': c.get('name', ''),
+                        'type_line': c.get('type_line', ''),
+                        'oracle_text': c.get('oracle_text', ''),
+                        'cmc': c.get('cmc', 0),
+                        'interactions': [{
+                            'action': cat.name,
+                            'target_type': 'manual',
+                        }],
                     })
-
-        if interactions:
-            classified.append({
-                'name': name,
-                'type_line': tl,
-                'cmc': c.get('cmc', 0),
-                'oracle_text': ot,
-                'interactions': interactions,
-            })
+                break
 
     summary = {}
-    for action in ['destroy', 'exile', 'bounce', 'counter', 'damage', 'graveyard', 'tuck']:
-        summary[action] = {
-            'total': 0,
-            'by_target': {},
-        }
-        for target in ['creature', 'artifact', 'enchantment', 'planeswalker',
-                       'land', 'battle', 'permanent', 'nonland permanent',
-                       'spell', 'graveyard', 'any target', 'generic']:
-            summary[action]['by_target'][target] = 0
+    for action in INTERACTION_ACTIONS:
+        summary[action] = {'total': 0, 'by_target': {'manual': 0}}
+        for cat in interaction_cats:
+            if cat.name == action:
+                total = sum(
+                    aqty
+                    for (_, cid2), aqty in card_assignments.items()
+                    if cid2 == cat.id
+                )
+                summary[action]['total'] = total
+                summary[action]['by_target']['manual'] = total
 
-    for entry in classified:
-        seen = set()
-        for interaction in entry['interactions']:
-            key = (interaction['action'], interaction['target_type'])
-            if key not in seen:
-                seen.add(key)
-                summary[interaction['action']]['total'] += 1
-                target = interaction['target_type']
-                if target in summary[interaction['action']]['by_target']:
-                    summary[interaction['action']]['by_target'][target] += 1
-
-    total_interaction_spells = len(classified)
+    total_interaction_spells = sum(
+        s['total'] for s in summary.values()
+    )
 
     return {
         'total_interaction_spells': total_interaction_spells,
         'breakdown': summary,
-        'spells': classified,
-        'total_removal': summary['destroy']['total'] + summary['exile']['total'] + summary['bounce']['total'],
+        'spells': spells,
+        'total_removal': (summary['destroy']['total'] +
+                          summary['exile']['total'] +
+                          summary['bounce']['total']),
         'total_counterspells': summary['counter']['total'],
         'total_graveyard_hate': summary['graveyard']['total'],
+    }
+
+
+def _empty_result():
+    summary = {}
+    for action in INTERACTION_ACTIONS:
+        summary[action] = {'total': 0, 'by_target': {'manual': 0}}
+    return {
+        'total_interaction_spells': 0,
+        'breakdown': summary,
+        'spells': [],
+        'total_removal': 0,
+        'total_counterspells': 0,
+        'total_graveyard_hate': 0,
     }

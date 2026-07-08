@@ -57,6 +57,7 @@ class DeckCard(db.Model):
         return {
             'id': self.id,
             'deck_id': self.deck_id,
+            'card_id': self.card_id,
             'card': self.card.to_light_dict() if self.card else None,
             'quantity': self.quantity,
             'is_commander': self.is_commander,

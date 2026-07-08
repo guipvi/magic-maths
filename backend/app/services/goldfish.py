@@ -1,18 +1,14 @@
 """
-Goldfish Speed Simulator (Feature 2)
+Goldfish Speed Simulator
 
-Simulates playing solitaire ("goldfishing") at maximum speed to determine
-how quickly the hand empties.
+Simulates playing solitaire ("goldfishing") using category data to make
+smart play decisions. Category-aware: ramp cards are prioritized to generate
+extra mana, draw cards are cast to refill the hand.
 
-Algorithm per simulation:
-1. Shuffle deck, draw opening 7
-2. Each turn: play a land if available, then play the highest-CMC
-   spell that fits in available mana
-3. Repeat until turn 15 or until deck is exhausted
-4. Track cards-in-hand and mana-available per turn across 2000 sims
-
-Output: average/median/P10/P90 turn when hand is empty, plus
-probability of empty hand by turns 5 and 7.
+No regex heuristics. Card behavior is known only through:
+- Category assignments (ramp with mana_amount, draw, etc.)
+- Card types (type_line) for land detection
+- CMCs for casting decisions
 """
 
 import numpy as np
@@ -32,19 +28,34 @@ def _is_land(card):
     return 'land' in tl_lower
 
 
-def _cmc_buckets(cards):
-    buckets = defaultdict(list)
-    for c in cards:
-        if _is_land(c):
+def _build_category_map(assignments, categories):
+    """Build card_id -> {type, mana_amount, name} from assignments."""
+    cat_map = {}
+    if not assignments or not categories:
+        return cat_map
+
+    cat_type = {c['id']: c.get('config', {}).get('type', '') for c in categories}
+    cat_mana = {c['id']: c.get('config', {}).get('mana_amount') for c in categories}
+
+    for a in assignments:
+        cid = a.get('card_id')
+        cat_id = a.get('category_id')
+        ctype = cat_type.get(cat_id, '')
+        if not ctype:
             continue
-        cmc = int(c.get('cmc', 0))
-        if cmc > 12:
-            cmc = 12
-        buckets[cmc].append(c)
-    return buckets
+        if cid not in cat_map:
+            cat_map[cid] = []
+        mana_amt = a.get('mana_amount') or cat_mana.get(cat_id) or 0
+        cat_map[cid].append({
+            'type': ctype,
+            'mana_amount': mana_amt,
+        })
+    return cat_map
 
 
-def simulate_goldfish(deck_cards, deck_size=None, simulations=2000):
+def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
+                       assignments=None, categories=None,
+                       triggers=None, card_triggers=None):
     if deck_size is None:
         deck_size = sum(c.get('quantity', 1) for c in deck_cards)
 
@@ -53,10 +64,11 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000):
         qty = c.get('quantity', 1)
         classified.extend([c] * qty)
 
+    total_cards = len(classified)
     land_count = sum(1 for c in classified if _is_land(c))
     nonland = [c for c in classified if not _is_land(c)]
-    cmc_buckets = _cmc_buckets(nonland)
-    total_cards = len(classified)
+
+    cat_map = _build_category_map(assignments, categories)
 
     rng = np.random.default_rng(42)
     results = defaultdict(list)
@@ -67,11 +79,25 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000):
 
         is_land_arr = [1 if _is_land(classified[i]) else 0 for i in range(total_cards)]
         cmc_arr = [int(classified[i].get('cmc', 0)) if not _is_land(classified[i]) else 0 for i in range(total_cards)]
+        ramp_mana_arr = [0] * total_cards
+        is_ramp_arr = [0] * total_cards
+        is_draw_arr = [0] * total_cards
+
+        for i, c in enumerate(classified):
+            cid = c.get('id')
+            if cid in cat_map:
+                for entry in cat_map[cid]:
+                    if entry['type'] == 'ramp':
+                        is_ramp_arr[i] = 1
+                        ramp_mana_arr[i] = int(entry.get('mana_amount', 0))
+                    elif entry['type'] == 'draw':
+                        is_draw_arr[i] = 1
 
         hand_indices = deck[:7]
         library = deck[7:]
         hand = list(hand_indices)
         lands_played = 0
+        extra_mana = 0
         cards_in_hand_by_turn = []
         max_mana_by_turn = []
 
@@ -81,18 +107,55 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000):
                 hand.append(drawn)
 
             hand_land_indices = [i for i in hand if is_land_arr[i]]
-
             if hand_land_indices:
                 to_play = hand_land_indices[0]
                 hand.remove(to_play)
                 lands_played += 1
 
-            mana_available = lands_played
+            mana_available = lands_played + extra_mana
 
+            # Phase 1: play ramp cards (they generate extra mana)
+            spent = True
+            while spent:
+                spent = False
+                ramp_in_hand = [i for i in hand if is_ramp_arr[i] and not is_land_arr[i]
+                                and cmc_arr[i] <= mana_available]
+                if ramp_in_hand:
+                    ramp_in_hand.sort(key=lambda i: cmc_arr[i])
+                    to_cast = ramp_in_hand[0]
+                    hand.remove(to_cast)
+                    mana_available -= cmc_arr[to_cast]
+                    mana_gained = ramp_mana_arr[to_cast]
+                    extra_mana += mana_gained
+                    mana_available += mana_gained
+                    spent = True
+
+            # Phase 2: play draw cards if hand is low
+            if len(hand) <= 3:
+                spent = True
+                while spent:
+                    spent = False
+                    draw_in_hand = [i for i in hand if is_draw_arr[i] and not is_land_arr[i]
+                                    and cmc_arr[i] <= mana_available]
+                    if draw_in_hand:
+                        draw_in_hand.sort(key=lambda i: cmc_arr[i])
+                        to_cast = draw_in_hand[0]
+                        hand.remove(to_cast)
+                        mana_available -= cmc_arr[to_cast]
+                        # Simulate drawing 1 card per draw spell
+                        if library:
+                            drawn = library.pop(0)
+                            hand.append(drawn)
+                        spent = True
+
+            # Phase 3: play highest CMC affordable
             spent = True
             while spent and mana_available > 0 and hand:
                 spent = False
-                playable = [i for i in hand if not is_land_arr[i] and cmc_arr[i] <= mana_available]
+                playable = [i for i in hand if not is_land_arr[i]
+                            and cmc_arr[i] <= mana_available
+                            and not is_ramp_arr[i]
+                            and not is_draw_arr[i]]
                 if playable:
                     playable.sort(key=lambda i: cmc_arr[i], reverse=True)
                     to_cast = playable[0]
@@ -101,12 +164,12 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000):
                     spent = True
 
             cards_in_hand_by_turn.append(len(hand))
-            max_mana_by_turn.append(lands_played)
+            max_mana_by_turn.append(lands_played + extra_mana)
 
             if not hand and not library:
                 for t in range(turn, 16):
                     cards_in_hand_by_turn.append(0)
-                    max_mana_by_turn.append(lands_played)
+                    max_mana_by_turn.append(lands_played + extra_mana)
                 break
 
             if not hand:
@@ -117,19 +180,25 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000):
                         hand.append(drawn)
                         if is_land_arr[drawn]:
                             lands_played += 1
-                        hand_playable = [i for i in hand if not is_land_arr[i] and cmc_arr[i] <= lands_played]
+                        if is_ramp_arr[drawn] and not is_land_arr[drawn]:
+                            extra_mana += ramp_mana_arr[drawn]
+                        mana_avail = lands_played + extra_mana
+                        hand_playable = [i for i in hand if not is_land_arr[i]
+                                         and cmc_arr[i] <= mana_avail
+                                         and not is_ramp_arr[i]
+                                         and not is_draw_arr[i]]
                         if hand_playable:
                             hand_playable.sort(key=lambda i: cmc_arr[i], reverse=True)
                             to_cast = hand_playable[0]
                             hand.remove(to_cast)
                         cards_in_hand_by_turn.append(len(hand))
-                        max_mana_by_turn.append(lands_played)
+                        max_mana_by_turn.append(mana_avail)
                     else:
                         cards_in_hand_by_turn.append(len(hand))
-                        max_mana_by_turn.append(lands_played)
+                        max_mana_by_turn.append(lands_played + extra_mana)
                     if not hand and not library:
                         cards_in_hand_by_turn.append(0)
-                        max_mana_by_turn.append(lands_played)
+                        max_mana_by_turn.append(lands_played + extra_mana)
                 break
 
         results['cards_in_hand'].append(cards_in_hand_by_turn[:16])
