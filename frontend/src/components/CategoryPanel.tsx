@@ -5,9 +5,10 @@ import { Plus, Trash2, Tag, Zap, Link2 } from 'lucide-react'
 interface Props {
   deckId: string
   cards: any[]
+  onTriggersChange?: () => void
 }
 
-export default function CategoryPanel({ deckId, cards }: Props) {
+export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props) {
   const [allCategories, setAllCategories] = useState<any[]>([])
   const [assignments, setAssignments] = useState<any[]>([])
   const [triggers, setTriggers] = useState<any[]>([])
@@ -41,6 +42,7 @@ export default function CategoryPanel({ deckId, cards }: Props) {
     ]).then(([trigRes, ctRes]) => {
       setTriggers(trigRes.data)
       setCardTriggers(ctRes.data)
+      onTriggersChange?.()
     })
   }
 

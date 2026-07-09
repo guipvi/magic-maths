@@ -98,6 +98,7 @@ def _load_category_data(deck_id, cards):
             card_id = ct.source_assignment.card_id
             qty = card_counts.get(card_id, 1)
             card_triggers.append({
+                'source_card_id': card_id,
                 'source_category_id': src_cat_id,
                 'target_category_id': ct.target_category_id,
                 'trigger_count': ct.trigger_count,
@@ -315,7 +316,21 @@ def full_analysis():
                 category_assignments=cat_assignments_for_comm,
                 category_analysis_by_turn=cat_result.get('by_turn') if cat_result else None,
                 mana_ramp_by_turn=mana_result.get('by_turn') if mana_result else None,
+                condition_groups=comm_config.condition_groups or [],
             )
+
+    # Overwrite category analysis total_expected with mana-gated values for display
+    if mana_result and cat_result:
+        for turn, mana_turn in mana_result.get('by_turn', {}).items():
+            cat_turn = cat_result.get('by_turn', {}).get(turn)
+            if cat_turn is None:
+                continue
+            for cid_str, cat_entry in mana_turn.get('categories', {}).items():
+                gated = cat_entry.get('total_expected_gated')
+                if gated is not None:
+                    cid_int = int(cid_str)
+                    if cid_int in cat_turn.get('categories', {}):
+                        cat_turn['categories'][cid_int]['total_expected'] = gated
 
     return jsonify({
         'deck': deck_info,
@@ -399,6 +414,7 @@ def categories_analysis():
             card_id = ct.source_assignment.card_id
             qty = card_counts.get(card_id, 1)
             card_triggers.append({
+                'source_card_id': card_id,
                 'source_category_id': src_cat_id,
                 'target_category_id': ct.target_category_id,
                 'trigger_count': ct.trigger_count,

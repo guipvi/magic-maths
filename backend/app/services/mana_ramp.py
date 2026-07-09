@@ -71,6 +71,30 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=
             assignments, categories, triggers, card_triggers,
         )
 
+    results = {}
+    for turn in range(1, 11):
+        n_drawn = min(7 + (turn - 1), deck_size)
+        prob_lands = []
+        max_k = min(land_count, int(n_drawn))
+        for k in range(0, max_k + 1):
+            prob_lands.append(_hypergeom_prob(deck_size, land_count, int(n_drawn), k))
+        expected_lands = sum(k * p for k, p in enumerate(prob_lands))
+        lands_in_play = min(expected_lands, turn)
+        p_land_drop = 1.0
+        if land_count > 0:
+            p_land_drop = 1 - _hypergeom_cdf(deck_size, land_count, int(n_drawn), turn - 1)
+        results[turn] = {
+            'turn': turn,
+            'cards_drawn': n_drawn,
+            'expected_lands_in_play': round(float(lands_in_play), 2),
+            'mana_from_lands': round(float(lands_in_play), 2),
+            'ramp_contributions': {},
+            'total_ramp_mana': 0.0,
+            'total_expected_mana': round(float(lands_in_play), 2),
+            'prob_hitting_land_drop': round(float(p_land_drop), 3),
+            'categories': {},
+        }
+
     return {
         'land_count': land_count,
         'avg_cmc': round(avg_cmc, 2),
@@ -80,7 +104,7 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=
         'ramp_breakdown': {},
         'draw_breakdown': {},
         'alcance_breakdown': {},
-        'by_turn': {},
+        'by_turn': results,
     }
 
 
@@ -99,6 +123,22 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
     ramp_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'ramp'}
     draw_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'draw'}
     alcance_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'alcance'}
+
+    # Build card_id -> cmc mapping for ramp CMC gating
+    card_cmc = {}
+    for c in deck_cards:
+        cid = c.get('id')
+        if cid is not None:
+            card_cmc[cid] = c.get('cmc', 0)
+
+    # Build category_id -> min CMC among assigned cards (for mana gating all categories)
+    cat_min_cmc = {}
+    if assignments:
+        for a in assignments:
+            cat_id = a.get('category_id')
+            cmc = card_cmc.get(a.get('card_id'), 0)
+            if cat_id not in cat_min_cmc or cmc < cat_min_cmc[cat_id]:
+                cat_min_cmc[cat_id] = cmc
 
     total_ramp = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in ramp_cats)
     total_draw = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in draw_cats)
@@ -119,13 +159,26 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
         if s['id'] in alcance_cats:
             alcance_breakdown[s['name']] = s['cards_assigned']
 
+    # Pre-compute expected extra draws from draw categories per turn
+    extra_draws_by_turn = {}
+    for turn in range(1, 11):
+        turn_data = cat_result['by_turn'].get(turn, {})
+        cat_entries = turn_data.get('categories', {})
+        extra = 0.0
+        for cid in draw_cats:
+            entry = cat_entries.get(cid, cat_entries.get(str(cid), {}))
+            extra += float(entry.get('total_expected', 0))
+        extra_draws_by_turn[turn] = extra
+
     results = {}
     for turn in range(1, 11):
-        cards_drawn_by_turn = min(7 + (turn - 1), deck_size)
+        base_drawn = 7 + (turn - 1)
+        extra_draws = extra_draws_by_turn.get(turn, 0.0)
+        cards_drawn_by_turn = min(base_drawn + extra_draws, deck_size)
 
         prob_lands = []
-        for k in range(0, min(land_count, cards_drawn_by_turn) + 1):
-            prob_lands.append(_hypergeom_prob(deck_size, land_count, cards_drawn_by_turn, k))
+        for k in range(0, min(land_count, int(cards_drawn_by_turn)) + 1):
+            prob_lands.append(_hypergeom_prob(deck_size, land_count, int(cards_drawn_by_turn), k))
 
         expected_lands = sum(k * p for k, p in enumerate(prob_lands))
         lands_in_play = min(expected_lands, turn)
@@ -135,11 +188,34 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
 
         ramp_contributions = {}
         total_ramp_mana = 0.0
-        for cid, cat in ramp_cats.items():
-            entry = cat_entries.get(cid, cat_entries.get(str(cid), {}))
-            expected = float(entry.get('total_expected', 0))
-            ramp_contributions[cat['name']] = round(expected, 2)
-            total_ramp_mana += expected
+
+        # Compute which ramp categories are castable based on available mana
+        # Only ramp spells whose CMC <= available mana can be cast
+        # Iterate to handle cascading ramp (e.g. Sol Ring enables Cultivate)
+        mana_before_ramp = float(lands_in_play)
+        sorted_ramp = sorted(ramp_cats.items(), key=lambda x: cat_min_cmc.get(x[0], 0))
+        enabled = set()
+        for _ in range(len(ramp_cats) + 1):
+            changed = False
+            for cid, cat in sorted_ramp:
+                if cid in enabled:
+                    continue
+                min_cmc = cat_min_cmc.get(cid, 0)
+                if mana_before_ramp >= min_cmc:
+                    entry = cat_entries.get(cid, cat_entries.get(str(cid), {}))
+                    expected = float(entry.get('total_expected', 0))
+                    mana_before_ramp += expected
+                    total_ramp_mana += expected
+                    ramp_contributions[cat['name']] = round(expected, 2)
+                    enabled.add(cid)
+                    changed = True
+            if not changed:
+                break
+
+        # For ramp categories that weren't enabled (not enough mana), set contribution to 0
+        for cid, cat in sorted_ramp:
+            if cid not in enabled:
+                ramp_contributions[cat['name']] = 0.0
 
         mana_from_lands = round(float(lands_in_play), 2)
         total_mana = round(mana_from_lands + total_ramp_mana, 2)
@@ -148,7 +224,7 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
 
         p_land_drop = 1.0
         if land_count > 0:
-            p_land_drop = 1 - _hypergeom_cdf(deck_size, land_count, cards_drawn_by_turn, turn - 1)
+            p_land_drop = 1 - _hypergeom_cdf(deck_size, land_count, int(cards_drawn_by_turn), turn - 1)
 
         cat_breakdown = {}
         for cid, entry in cat_entries.items():
@@ -161,8 +237,21 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
                     'type': info.get('config', {}).get('type', ''),
                     'expected': float(entry.get('expected', 0)),
                     'total_expected': float(entry.get('total_expected', 0)),
+                    'total_expected_gated': float(entry.get('total_expected', 0)),
                     'prob_at_least_1': float(entry.get('prob_at_least_1', 0)),
                 }
+
+        # Overwrite total_expected_gated with CMC-gated values for ALL categories
+        for cid_str, cd in cat_breakdown.items():
+            cid_int = int(cid_str)
+            if cd.get('type') == 'ramp':
+                cd['total_expected_gated'] = ramp_contributions.get(cd['name'], 0.0)
+            else:
+                min_cmc = cat_min_cmc.get(cid_int, 0)
+                if total_mana >= min_cmc:
+                    cd['total_expected_gated'] = cd['total_expected']
+                else:
+                    cd['total_expected_gated'] = 0.0
 
         results[turn] = {
             'turn': turn,
@@ -274,8 +363,21 @@ def analyze_deck_mana_fast(deck_size, land_count, categories, cat_result, ramp_c
                     'type': info.get('config', {}).get('type', ''),
                     'expected': float(entry.get('expected', 0)),
                     'total_expected': float(entry.get('total_expected', 0)),
+                    'total_expected_gated': float(entry.get('total_expected', 0)),
                     'prob_at_least_1': float(entry.get('prob_at_least_1', 0)),
                 }
+
+        # Overwrite total_expected_gated with CMC-gated values for ALL categories
+        for cid_str, cd in cat_breakdown.items():
+            cid_int = int(cid_str)
+            if cd.get('type') == 'ramp':
+                cd['total_expected_gated'] = ramp_contributions.get(cd['name'], 0.0)
+            else:
+                min_cmc = cat_min_cmc.get(cid_int, 0)
+                if total_mana >= min_cmc:
+                    cd['total_expected_gated'] = cd['total_expected']
+                else:
+                    cd['total_expected_gated'] = 0.0
 
         results[turn] = {
             'turn': turn,

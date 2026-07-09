@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { commander as api, categories as catApi } from '../services/api'
 import { Crown, Save, Trash2, Plus, GripVertical } from 'lucide-react'
+import CommanderConditionBuilder from './CommanderConditionBuilder'
 
 interface Props {
   deckId: string
@@ -13,9 +14,11 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
   const [selectedCardId, setSelectedCardId] = useState<number | ''>('')
   const [manaLeftOver, setManaLeftOver] = useState(0)
   const [requirements, setRequirements] = useState<{ category_id: number; count: number }[]>([])
+  const [conditionGroups, setConditionGroups] = useState<any[]>([])
   const [allCategories, setAllCategories] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [useAdvancedConditions, setUseAdvancedConditions] = useState(false)
 
   useEffect(() => {
     if (!deckId) return
@@ -31,6 +34,8 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
         setSelectedCardId(cfg.card_id)
         setManaLeftOver(cfg.mana_left_over || 0)
         setRequirements(cfg.min_category_requirements || [])
+        setConditionGroups(cfg.condition_groups || [])
+        setUseAdvancedConditions((cfg.condition_groups || []).length > 0)
       }
     }).finally(() => setLoading(false))
   }, [deckId])
@@ -42,7 +47,8 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
       const data = {
         card_id: Number(selectedCardId),
         mana_left_over: manaLeftOver,
-        min_category_requirements: requirements,
+        min_category_requirements: useAdvancedConditions ? [] : requirements,
+        condition_groups: useAdvancedConditions ? conditionGroups : [],
       }
       const res = await api.saveConfig(deckId, data)
       setConfig(res.data.config)
@@ -125,16 +131,41 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
         </div>
       </div>
 
-      <div>
-        <div className="flex items-center justify-between mb-2">
-          <label className="label mb-0">Requisitos mínimos de categorias</label>
-          <button onClick={addRequirement} className="btn btn-primary text-xs flex items-center gap-1 py-1">
-            <Plus className="w-3 h-3" /> Adicionar
-          </button>
-        </div>
-        <p className="text-xs text-magic-muted mb-3">
-          Eventos acumulados mínimos em categorias antes de conjurar o commander
+      {/* Mode Toggle */}
+      <div className="flex items-center gap-4 bg-slate-800 rounded-lg p-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={useAdvancedConditions}
+            onChange={e => setUseAdvancedConditions(e.target.checked)}
+            className="w-4 h-4"
+          />
+          <span className="text-sm font-medium">Usar condições avançadas (E/OU)</span>
+        </label>
+        <p className="text-xs text-magic-muted">
+          {useAdvancedConditions
+            ? 'Modo avançado: combine múltiplas condições com lógica E/OU'
+            : 'Modo simples: requisitos básicos de categorias'}
         </p>
+      </div>
+
+      {useAdvancedConditions ? (
+        <CommanderConditionBuilder
+          conditionGroups={conditionGroups}
+          onUpdate={setConditionGroups}
+          allCategories={allCategories}
+        />
+      ) : (
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <label className="label mb-0">Requisitos mínimos de categorias</label>
+            <button onClick={addRequirement} className="btn btn-primary text-xs flex items-center gap-1 py-1">
+              <Plus className="w-3 h-3" /> Adicionar
+            </button>
+          </div>
+          <p className="text-xs text-magic-muted mb-3">
+            Eventos acumulados mínimos em categorias antes de conjurar o commander
+          </p>
         {requirements.length === 0 && (
           <p className="text-sm text-magic-muted text-center py-4">Nenhum requisito definido</p>
         )}
@@ -169,6 +200,7 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
           ))}
         </div>
       </div>
+      )}
 
       <div className="flex justify-end">
         <button
@@ -193,7 +225,7 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
                   <th className="text-right py-2 px-2">Custo Commander</th>
                   <th className="text-right py-2 px-2">Mana Sobra</th>
                   <th className="text-center py-2 px-2">Mana Suficiente</th>
-                  <th className="text-center py-2 px-2">Requisitos OK</th>
+                  <th className="text-center py-2 px-2">{useAdvancedConditions ? 'Condições OK' : 'Requisitos OK'}</th>
                   <th className="text-center py-2 px-2">Prob. Combinada</th>
                 </tr>
               </thead>
@@ -215,9 +247,9 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
                         : <span className="text-red-400">Não</span>}
                     </td>
                     <td className="text-center py-2 px-2">
-                      {turn.all_category_requirements_met_expected
-                        ? <span className="text-green-400">Sim</span>
-                        : <span className="text-red-400">Não</span>}
+                      {useAdvancedConditions
+                        ? (turn.all_conditions_met ? <span className="text-green-400">Sim</span> : <span className="text-red-400">Não</span>)
+                        : (turn.all_category_requirements_met_expected ? <span className="text-green-400">Sim</span> : <span className="text-red-400">Não</span>)}
                     </td>
                     <td className="text-center py-2 px-2">
                       <span className={turn.combined_probability > 0.5 ? 'text-green-400' : 'text-amber-400'}>
@@ -230,7 +262,7 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
             </table>
           </div>
 
-          {commanderAnalysis.min_category_requirements?.length > 0 && (
+          {!useAdvancedConditions && commanderAnalysis.min_category_requirements?.length > 0 && (
             <div className="mt-4">
               <h5 className="text-sm font-medium mb-2">Detalhamento dos Requisitos de Categoria</h5>
               <div className="overflow-x-auto">
@@ -261,6 +293,29 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+          )}
+
+          {useAdvancedConditions && commanderAnalysis.condition_groups?.length > 0 && (
+            <div className="mt-4">
+              <h5 className="text-sm font-medium mb-2">Detalhamento das Condições Avançadas</h5>
+              <div className="space-y-2">
+                {Object.values(commanderAnalysis.by_turn || {}).map((turn: any) => (
+                  <div key={turn.turn} className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                    <div className="font-medium text-sm mb-2">Turno {turn.turn}</div>
+                    {turn.condition_groups_evaluation?.group_results?.map((group: any, i: number) => {
+                      const groupDef = commanderAnalysis.condition_groups?.[i]
+                      return (
+                        <div key={i} className="text-xs text-magic-muted ml-2 mb-1">
+                          <span className={group.is_met ? 'text-green-400' : 'text-red-400'}>
+                            Grupo {i + 1} ({group.operator}): {group.is_met ? '✓' : '✗'} - {(group.probability * 100).toFixed(0)}%
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                ))}
               </div>
             </div>
           )}

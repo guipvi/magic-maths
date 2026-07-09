@@ -53,6 +53,7 @@ def save_config(deck_id):
 
     mana_left_over = data.get('mana_left_over', 0)
     min_category_requirements = data.get('min_category_requirements', [])
+    condition_groups = data.get('condition_groups', [])
 
     # Sync is_commander flag on DeckCard entries
     DeckCard.query.filter_by(deck_id=deck_id, is_commander=True).update({'is_commander': False})
@@ -63,6 +64,7 @@ def save_config(deck_id):
         card_id=card_id,
         mana_left_over=mana_left_over,
         min_category_requirements=min_category_requirements,
+        condition_groups=condition_groups,
     )
     return jsonify({'config': config.to_dict()})
 

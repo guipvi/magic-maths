@@ -28,6 +28,7 @@ export default function DeckAnalysis() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState<string>('categories')
+  const [triggerVersion, setTriggerVersion] = useState(0)
 
   useEffect(() => {
     if (!id) return
@@ -45,7 +46,7 @@ export default function DeckAnalysis() {
         setError(err.response?.data?.error || 'Erro ao carregar análise')
       })
       .finally(() => setLoading(false))
-  }, [id])
+  }, [id, triggerVersion])
 
   if (loading) {
     return (
@@ -102,7 +103,7 @@ export default function DeckAnalysis() {
       <div>
         {activeTab === 'categories' && (
           <div className="space-y-6">
-            {id && <CategoryPanel deckId={id} cards={cards} />}
+            {id && <CategoryPanel deckId={id} cards={cards} onTriggersChange={() => setTriggerVersion(v => v + 1)} />}
             {data?.categories && <CategoryChart data={data.categories} />}
           </div>
         )}

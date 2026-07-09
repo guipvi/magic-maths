@@ -29,7 +29,7 @@ def _is_land(card):
 
 
 def _build_category_map(assignments, categories):
-    """Build card_id -> {type, mana_amount, name} from assignments."""
+    """Build card_id -> {type, mana_amount, name, category_id} from assignments."""
     cat_map = {}
     if not assignments or not categories:
         return cat_map
@@ -46,11 +46,44 @@ def _build_category_map(assignments, categories):
         if cid not in cat_map:
             cat_map[cid] = []
         mana_amt = a.get('mana_amount') or cat_mana.get(cat_id) or 0
+        same_turn = a.get('same_turn')
         cat_map[cid].append({
             'type': ctype,
             'mana_amount': mana_amt,
+            'same_turn': same_turn,
+            'category_id': cat_id,
         })
     return cat_map
+
+
+def _build_trigger_maps(triggers, card_triggers):
+    """Build lookup maps for category and card triggers.
+
+    Returns:
+        cat_trigger_map: {source_cat_id: [(target_cat_id, trigger_count)]}
+        card_trigger_map: {card_id: [(target_cat_id, trigger_count, per_turn)]}
+    """
+    cat_trigger_map = defaultdict(list)
+    card_trigger_map = defaultdict(list)
+
+    if triggers:
+        for t in triggers:
+            src = t.get('source_category_id')
+            tgt = t.get('target_category_id')
+            count = t.get('trigger_count', 1)
+            if src and tgt:
+                cat_trigger_map[src].append((tgt, count))
+
+    if card_triggers:
+        for ct in card_triggers:
+            card_id = ct.get('source_card_id')
+            tgt = ct.get('target_category_id')
+            count = ct.get('trigger_count', 1)
+            per_turn = ct.get('per_turn')
+            if card_id and tgt:
+                card_trigger_map[card_id].append((tgt, count, per_turn))
+
+    return dict(cat_trigger_map), dict(card_trigger_map)
 
 
 def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
@@ -69,6 +102,25 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
     nonland = [c for c in classified if not _is_land(c)]
 
     cat_map = _build_category_map(assignments, categories)
+    cat_trigger_map, card_trigger_map = _build_trigger_maps(triggers, card_triggers)
+
+    card_to_categories = defaultdict(set)
+    if assignments:
+        for a in assignments:
+            card_to_categories[a.get('card_id')].add(a.get('category_id'))
+
+    cat_type_by_id = {}
+    if categories:
+        for c in categories:
+            cat_type_by_id[c['id']] = c.get('config', {}).get('type', '')
+
+    cat_max_per_turn = defaultdict(float)
+    if assignments:
+        for a in assignments:
+            cat_id = a.get('category_id')
+            mpt = a.get('max_per_turn')
+            if mpt is not None and mpt > 0:
+                cat_max_per_turn[cat_id] += mpt
 
     rng = np.random.default_rng(42)
     results = defaultdict(list)
@@ -82,6 +134,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
         ramp_mana_arr = [0] * total_cards
         is_ramp_arr = [0] * total_cards
         is_draw_arr = [0] * total_cards
+        same_turn_arr = [True] * total_cards
 
         for i, c in enumerate(classified):
             cid = c.get('id')
@@ -90,6 +143,9 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                     if entry['type'] == 'ramp':
                         is_ramp_arr[i] = 1
                         ramp_mana_arr[i] = int(entry.get('mana_amount', 0))
+                        st = entry.get('same_turn')
+                        if st is not None:
+                            same_turn_arr[i] = st
                     elif entry['type'] == 'draw':
                         is_draw_arr[i] = 1
 
@@ -102,6 +158,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
         max_mana_by_turn = []
 
         for turn in range(1, 16):
+            cast_this_turn_ids = set()
             if turn > 1 and library:
                 drawn = library.pop(0)
                 hand.append(drawn)
@@ -124,10 +181,12 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                     ramp_in_hand.sort(key=lambda i: cmc_arr[i])
                     to_cast = ramp_in_hand[0]
                     hand.remove(to_cast)
+                    cast_this_turn_ids.add(classified[to_cast].get('id'))
                     mana_available -= cmc_arr[to_cast]
                     mana_gained = ramp_mana_arr[to_cast]
                     extra_mana += mana_gained
-                    mana_available += mana_gained
+                    if same_turn_arr[to_cast]:
+                        mana_available += mana_gained
                     spent = True
 
             # Phase 2: play draw cards if hand is low
@@ -141,6 +200,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                         draw_in_hand.sort(key=lambda i: cmc_arr[i])
                         to_cast = draw_in_hand[0]
                         hand.remove(to_cast)
+                        cast_this_turn_ids.add(classified[to_cast].get('id'))
                         mana_available -= cmc_arr[to_cast]
                         # Simulate drawing 1 card per draw spell
                         if library:
@@ -160,8 +220,44 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                     playable.sort(key=lambda i: cmc_arr[i], reverse=True)
                     to_cast = playable[0]
                     hand.remove(to_cast)
+                    cast_this_turn_ids.add(classified[to_cast].get('id'))
                     mana_available -= cmc_arr[to_cast]
                     spent = True
+
+            # Phase 4: process triggers (e.g. sacrifice -> draw)
+            if cast_this_turn_ids and (cat_trigger_map or card_trigger_map):
+                trigger_draws = 0
+
+                source_events = defaultdict(float)
+                for card_id in cast_this_turn_ids:
+                    for cat_id in card_to_categories.get(card_id, set()):
+                        if cat_id in cat_trigger_map:
+                            source_events[cat_id] += 1
+
+                for src_cat_id in source_events:
+                    cap = cat_max_per_turn.get(src_cat_id, 0)
+                    if cap > 0:
+                        source_events[src_cat_id] = min(source_events[src_cat_id], cap)
+
+                for src_cat_id, events in source_events.items():
+                    for tgt_cat_id, count in cat_trigger_map.get(src_cat_id, []):
+                        if cat_type_by_id.get(tgt_cat_id) == 'draw':
+                            trigger_draws += events * count
+
+                for card_id in cast_this_turn_ids:
+                    for tgt_cat_id, count, per_turn in card_trigger_map.get(card_id, []):
+                        actual_count = count
+                        if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
+                            actual_count = per_turn[turn - 1]
+                            if actual_count == -1:
+                                actual_count = count
+                        if cat_type_by_id.get(tgt_cat_id) == 'draw':
+                            trigger_draws += actual_count
+
+                for _ in range(int(trigger_draws)):
+                    if library:
+                        drawn = library.pop(0)
+                        hand.append(drawn)
 
             cards_in_hand_by_turn.append(len(hand))
             max_mana_by_turn.append(lands_played + extra_mana)
@@ -183,6 +279,8 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                         if is_ramp_arr[drawn] and not is_land_arr[drawn]:
                             extra_mana += ramp_mana_arr[drawn]
                         mana_avail = lands_played + extra_mana
+                        if is_ramp_arr[drawn] and not is_land_arr[drawn] and not same_turn_arr[drawn]:
+                            mana_avail -= ramp_mana_arr[drawn]
                         hand_playable = [i for i in hand if not is_land_arr[i]
                                          and cmc_arr[i] <= mana_avail
                                          and not is_ramp_arr[i]
