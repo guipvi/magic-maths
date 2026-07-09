@@ -100,83 +100,99 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
         if src in cat_index and tgt in cat_index:
             links.append((cat_index[src], cat_index[tgt], count, accumulate))
 
+    # Identify draw category indices for iterative draw feedback
+    draw_indices = set()
+    for i, cid in enumerate(cat_ids):
+        if cat_map[cid].get('config', {}).get('type') == 'draw':
+            draw_indices.add(i)
+
     # Surplus pool for accumulate categories
     surplus = np.zeros(n_cats)
 
     # Per-turn analysis
     by_turn = {}
     for turn in range(1, max_turns + 1):
-        n_drawn = min(7 + (turn - 1), deck_size)
+        base_n_drawn = min(7 + (turn - 1), deck_size)
+        n_drawn = base_n_drawn
 
-        # 1. Expected direct cards drawn per category (hypergeometric mean)
-        expected_direct_cards = np.array([
-            n_drawn * direct_count[i] / deck_size if deck_size > 0 else 0.0
-            for i in range(n_cats)
-        ])
+        # Iterative feedback: draw spells increase effective cards drawn,
+        # which increases probability of drawing more draw spells
+        for _ in range(10):
+            # 1. Expected direct cards drawn per category (hypergeometric mean)
+            expected_direct_cards = np.array([
+                n_drawn * direct_count[i] / deck_size if deck_size > 0 else 0.0
+                for i in range(n_cats)
+            ])
 
-        # 2. Expected direct events (weighted by multiplier)
-        # Then apply per-assignment max_per_turn caps
-        pool = np.zeros(n_cats)
-        for i in range(n_cats):
-            if direct_count[i] > 0:
-                avg_mult = direct_weight[i] / direct_count[i]
-                raw = expected_direct_cards[i] * avg_mult
-                if max_per_turn_by_cat[i] > 0:
-                    pool[i] = min(raw, max_per_turn_by_cat[i])
-                else:
-                    pool[i] = raw
+            # 2. Expected direct events (weighted by multiplier)
+            pool = np.zeros(n_cats)
+            for i in range(n_cats):
+                if direct_count[i] > 0:
+                    avg_mult = direct_weight[i] / direct_count[i]
+                    raw = expected_direct_cards[i] * avg_mult
+                    if max_per_turn_by_cat[i] > 0:
+                        pool[i] = min(raw, max_per_turn_by_cat[i])
+                    else:
+                        pool[i] = raw
 
-        # 2b. Card-trigger base events (per-card triggers with per_turn support)
-        card_trigger_base = np.zeros(n_cats)
-        if card_triggers:
-            for ct in card_triggers:
-                src = ct.get('source_category_id')
-                tgt = ct.get('target_category_id')
-                qty = ct.get('quantity', 1)
-                per_turn = ct.get('per_turn')
-                if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
-                    count = per_turn[turn - 1]
-                    if count == -1:
+            # 2b. Card-trigger base events (per-card triggers with per_turn support)
+            card_trigger_base = np.zeros(n_cats)
+            if card_triggers:
+                for ct in card_triggers:
+                    src = ct.get('source_category_id')
+                    tgt = ct.get('target_category_id')
+                    qty = ct.get('quantity', 1)
+                    per_turn = ct.get('per_turn')
+                    if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
+                        count = per_turn[turn - 1]
+                        if count == -1:
+                            count = ct.get('trigger_count', 1)
+                    else:
                         count = ct.get('trigger_count', 1)
-                else:
-                    count = ct.get('trigger_count', 1)
-                if src in cat_index and tgt in cat_index:
-                    tgt_idx = cat_index[tgt]
-                    card_trigger_base[tgt_idx] += count * qty * n_drawn / deck_size
+                    if src in cat_index and tgt in cat_index:
+                        tgt_idx = cat_index[tgt]
+                        card_trigger_base[tgt_idx] += count * qty * n_drawn / deck_size
 
-        # Add card trigger events to pool
-        pool += card_trigger_base
+            pool += card_trigger_base
 
-        # 3. Add surplus from previous turn (for accumulate categories)
-        pool += surplus
+            # 3. Add surplus from previous turn (for accumulate categories)
+            pool += surplus
 
-        # 4. Pre-fuel: categories with max_per_turn need to consume fuel
-        # for their direct events from linked sources
-        for tgt_idx in range(n_cats):
-            if pool[tgt_idx] <= 0 or max_per_turn_by_cat[tgt_idx] <= 0:
-                continue
-            events_to_fuel = pool[tgt_idx]
-            for src_idx, tgt_idx2, count, accumulate in links:
-                if tgt_idx2 != tgt_idx or count <= 0:
+            # 4. Pre-fuel: categories with max_per_turn need to consume fuel
+            for tgt_idx in range(n_cats):
+                if pool[tgt_idx] <= 0 or max_per_turn_by_cat[tgt_idx] <= 0:
                     continue
-                fuel_needed = events_to_fuel / count
-                fuel_used = min(pool[src_idx], fuel_needed)
-                events_fired = fuel_used * count
-                pool[src_idx] -= fuel_used
-                pool[tgt_idx] = events_fired
-                break
+                events_to_fuel = pool[tgt_idx]
+                for src_idx, tgt_idx2, count, accumulate in links:
+                    if tgt_idx2 != tgt_idx or count <= 0:
+                        continue
+                    fuel_needed = events_to_fuel / count
+                    fuel_used = min(pool[src_idx], fuel_needed)
+                    events_fired = fuel_used * count
+                    pool[src_idx] -= fuel_used
+                    pool[tgt_idx] = events_fired
+                    break
 
-        # 5. Process resource links: source produces into target
-        for src_idx, tgt_idx, count, accumulate in links:
-            if pool[src_idx] <= 0:
-                continue
-            target_headroom = float('inf')
-            if max_per_turn_by_cat[tgt_idx] > 0:
-                target_headroom = max(0, max_per_turn_by_cat[tgt_idx] - pool[tgt_idx])
-            max_source = target_headroom / count if count > 0 else 0
-            consumed = min(pool[src_idx], max_source)
-            pool[src_idx] -= consumed
-            pool[tgt_idx] += consumed * count
+            # 5. Process resource links
+            for src_idx, tgt_idx, count, accumulate in links:
+                if pool[src_idx] <= 0:
+                    continue
+                target_headroom = float('inf')
+                if max_per_turn_by_cat[tgt_idx] > 0:
+                    target_headroom = max(0, max_per_turn_by_cat[tgt_idx] - pool[tgt_idx])
+                max_source = target_headroom / count if count > 0 else 0
+                consumed = min(pool[src_idx], max_source)
+                pool[src_idx] -= consumed
+                pool[tgt_idx] += consumed * count
+
+            # Check convergence: extra draws from draw categories
+            extra_draws = sum(pool[i] for i in draw_indices) if draw_indices else 0.0
+            new_n_drawn = min(base_n_drawn + extra_draws, deck_size)
+
+            if abs(new_n_drawn - n_drawn) < 0.1:
+                n_drawn = new_n_drawn
+                break
+            n_drawn = new_n_drawn
 
         # 6. Compute surplus for next turn (only for accumulate categories)
         surplus.fill(0.0)
@@ -200,9 +216,10 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
                 }
                 continue
 
+            nd_int = int(n_drawn)
             probs = {}
             for thresh in [1, 2, 3]:
-                prob = 1.0 - _hypergeom_cdf(deck_size, K, n_drawn, thresh - 1)
+                prob = 1.0 - _hypergeom_cdf(deck_size, K, nd_int, thresh - 1)
                 probs[f'prob_at_least_{thresh}'] = round(float(prob), 4)
 
             category_probs[cid] = {
@@ -227,16 +244,16 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
                 for t1 in [1, 2]:
                     for t2 in [1, 2]:
                         prob = 0.0
-                        for k1 in range(t1, min(K1, n_drawn) + 1):
-                            max_k2 = min(K2, n_drawn - k1)
+                        for k1 in range(t1, min(K1, int(n_drawn)) + 1):
+                            max_k2 = min(K2, int(n_drawn) - k1)
                             for k2 in range(t2, max_k2 + 1):
                                 prob += _bivariate_hypergeom_pmf(
-                                    deck_size, K1, K2, n_drawn, k1, k2)
+                                    deck_size, K1, K2, int(n_drawn), k1, k2)
                         joint_probs[key][f'P(>={t1},{t2})'] = round(float(prob), 4)
 
         by_turn[turn] = {
             'turn': turn,
-            'cards_drawn': n_drawn,
+            'cards_drawn': round(float(n_drawn), 1),
             'categories': category_probs,
             'joint_probabilities': joint_probs,
         }

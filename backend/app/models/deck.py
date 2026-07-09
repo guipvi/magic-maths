@@ -72,7 +72,8 @@ class DeckCommanderConfig(db.Model):
     deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False, unique=True)
     card_id = db.Column(db.Integer, db.ForeignKey('cards.id'), nullable=False)
     mana_left_over = db.Column(db.Integer, default=0)
-    min_category_requirements = db.Column(db.JSON, default=list)
+    min_category_requirements = db.Column(db.JSON, default=list)  # Legacy: simple list
+    condition_groups = db.Column(db.JSON, default=list)  # New: list of condition groups with AND/OR logic
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc),
                            onupdate=lambda: datetime.now(timezone.utc))
@@ -90,4 +91,5 @@ class DeckCommanderConfig(db.Model):
             'card_image_uris': self.card.image_uris if self.card else None,
             'mana_left_over': self.mana_left_over,
             'min_category_requirements': self.min_category_requirements or [],
+            'condition_groups': self.condition_groups or [],
         }
