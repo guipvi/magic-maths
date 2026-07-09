@@ -44,6 +44,47 @@ def create_app(config_class=Config):
         from sqlalchemy import inspect
         insp = inspect(db.engine)
 
+        cat_cols = [c['name'] for c in insp.get_columns('categories')]
+        if 'parent_id' not in cat_cols:
+            db.session.execute(db.text(
+                "ALTER TABLE categories ADD COLUMN parent_id INTEGER REFERENCES categories(id)"
+            ))
+            db.session.commit()
+
+        # Drop old UNIQUE on name for SQLite (table recreation)
+        if 'sqlite' in app.config['SQLALCHEMY_DATABASE_URI']:
+            create_sql = db.session.execute(
+                db.text("SELECT sql FROM sqlite_master WHERE type='table' AND name='categories'")
+            ).scalar()
+            if create_sql and 'UNIQUE' in create_sql.upper():
+                old_parent_ids = dict(db.session.execute(
+                    db.text("SELECT id, parent_id FROM categories")
+                ).fetchall())
+                db.session.execute(db.text("UPDATE categories SET parent_id=NULL"))
+                db.session.execute(db.text("PRAGMA foreign_keys=OFF"))
+                db.session.execute(db.text("""
+                    CREATE TABLE categories_v2 (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name VARCHAR(64) NOT NULL,
+                        color VARCHAR(7) DEFAULT '#6366f1',
+                        config JSON DEFAULT '{}',
+                        is_default BOOLEAN DEFAULT 0,
+                        parent_id INTEGER REFERENCES categories(id),
+                        created_at DATETIME
+                    )
+                """))
+                db.session.execute(db.text("INSERT INTO categories_v2 SELECT * FROM categories"))
+                db.session.execute(db.text("DROP TABLE categories"))
+                db.session.execute(db.text("ALTER TABLE categories_v2 RENAME TO categories"))
+                db.session.execute(db.text("PRAGMA foreign_keys=ON"))
+                for cid, pid in old_parent_ids.items():
+                    if pid:
+                        db.session.execute(
+                            db.text("UPDATE categories SET parent_id=:pid WHERE id=:cid"),
+                            {'pid': pid, 'cid': cid}
+                        )
+                db.session.commit()
+
         cols = [c['name'] for c in insp.get_columns('deck_card_categories')]
         if 'tutored_card_id' not in cols:
             db.session.execute(db.text(

@@ -30,6 +30,13 @@ def list_categories():
     return jsonify([c.to_dict() for c in cats])
 
 
+@categories_bp.route('/tree', methods=['GET'])
+@jwt_required()
+def list_category_tree():
+    tree = get_category_tree()
+    return jsonify(tree)
+
+
 @categories_bp.route('', methods=['POST'])
 @jwt_required()
 def new_category():
@@ -40,6 +47,7 @@ def new_category():
         name=data['name'],
         color=data.get('color', '#6366f1'),
         config=data.get('config', {}),
+        parent_id=data.get('parent_id'),
     )
     return jsonify(cat.to_dict()), 201
 
@@ -48,8 +56,9 @@ def new_category():
 @jwt_required()
 def edit_category(category_id):
     data = request.get_json()
+    allowed = ('name', 'color', 'config', 'parent_id')
     cat = update_category(category_id, **{k: v for k, v in data.items()
-                                         if k in ('name', 'color', 'config')})
+                                         if k in allowed})
     if not cat:
         return jsonify({'error': 'Category not found'}), 404
     return jsonify(cat.to_dict())
@@ -64,7 +73,10 @@ def remove_category(category_id):
         return jsonify({'error': 'Category not found'}), 404
     if cat.is_default:
         return jsonify({'error': 'Cannot delete default category'}), 400
-    if delete_category(category_id):
+    result = delete_category(category_id)
+    if result is None:
+        return jsonify({'error': 'Cannot delete category with subcategories'}), 400
+    if result:
         return jsonify({'ok': True})
     return jsonify({'error': 'Category not found'}), 404
 

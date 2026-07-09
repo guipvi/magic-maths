@@ -8,7 +8,7 @@ data from the categories marked as type 'interaction'.
 from app.models.category import Category, DeckCardCategory
 
 INTERACTION_ACTIONS = [
-    'destroy', 'exile', 'bounce', 'counter', 'damage', 'graveyard', 'tuck',
+    'destroy', 'exile', 'bounce', 'counter', 'damage', 'graveyard hate', 'tuck',
 ]
 
 
@@ -19,14 +19,20 @@ def analyze_interactions_from_assignments(deck_id, deck_cards):
     ).all()
 
     cat_map = {c.id: c for c in interaction_cats}
-    cat_ids = list(cat_map.keys())
+    cat_ids = set(cat_map.keys())
+
+    # Include subcategories of interaction parents
+    for c in interaction_cats:
+        for child in c.children:
+            cat_ids.add(child.id)
+            cat_map[child.id] = child
 
     if not cat_ids:
         return _empty_result()
 
     assignments = DeckCardCategory.query.filter(
         DeckCardCategory.deck_id == deck_id,
-        DeckCardCategory.category_id.in_(cat_ids),
+        DeckCardCategory.category_id.in_(list(cat_ids)),
     ).all()
 
     card_counts = {}
@@ -76,6 +82,13 @@ def analyze_interactions_from_assignments(deck_id, deck_cards):
                     for (_, cid2), aqty in card_assignments.items()
                     if cid2 == cat.id
                 )
+                # Include assignments from subcategories
+                for child in cat.children:
+                    total += sum(
+                        aqty
+                        for (_, cid2), aqty in card_assignments.items()
+                        if cid2 == child.id
+                    )
                 summary[action]['total'] = total
                 summary[action]['by_target']['manual'] = total
 
@@ -91,7 +104,7 @@ def analyze_interactions_from_assignments(deck_id, deck_cards):
                           summary['exile']['total'] +
                           summary['bounce']['total']),
         'total_counterspells': summary['counter']['total'],
-        'total_graveyard_hate': summary['graveyard']['total'],
+        'total_graveyard_hate': summary['graveyard hate']['total'],
     }
 
 

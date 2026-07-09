@@ -81,7 +81,8 @@ export const analysis = {
 
 export const categories = {
   list: () => api.get('/categories'),
-  create: (data: { name: string; color?: string; config?: any }) =>
+  tree: () => api.get('/categories/tree'),
+  create: (data: { name: string; color?: string; config?: any; parent_id?: number | null }) =>
     api.post('/categories', data),
   update: (id: number, data: any) => api.put(`/categories/${id}`, data),
   delete: (id: number) => api.delete(`/categories/${id}`),

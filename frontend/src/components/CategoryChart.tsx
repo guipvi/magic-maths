@@ -8,6 +8,13 @@ interface Props {
   data: any
 }
 
+function catLabel(c: any, catMap: Record<number, any>): string {
+  if (c.parent_id && catMap[c.parent_id]) {
+    return `${catMap[c.parent_id].name} › ${c.name}`
+  }
+  return c.name
+}
+
 export default function CategoryChart({ data }: Props) {
   const [selectedCats, setSelectedCats] = useState<number[]>([])
   const [viewMode, setViewMode] = useState<'expected' | 'prob' | 'joint' | 'max'>('expected')
@@ -16,6 +23,7 @@ export default function CategoryChart({ data }: Props) {
 
   const { by_turn, categories } = data
   const turnKeys = Object.keys(by_turn).sort((a, b) => Number(a) - Number(b))
+  const catMap = Object.fromEntries((categories || []).map((c: any) => [c.id, c]))
 
   const toggleCat = (cid: number) => {
     setSelectedCats(prev =>
@@ -54,8 +62,8 @@ export default function CategoryChart({ data }: Props) {
       for (const c of categories || []) {
         const catData = turn.categories[c.id]
         if (catData) {
-          row[c.name] = catData.total_expected
-          row[`${c.name}_direct`] = catData.expected
+          row[`v_${c.id}`] = catData.total_expected
+          row[`d_${c.id}`] = catData.expected
         }
       }
       return row
@@ -76,7 +84,7 @@ export default function CategoryChart({ data }: Props) {
                 labelStyle={{ color: '#f1f5f9' }} />
               <Legend />
               {(categories || []).filter((c: any) => selectedCats.length === 0 || selectedCats.includes(c.id)).map((c: any) => (
-                <Bar key={c.id} dataKey={c.name} name={c.name} stackId="a" fill={c.color} />
+                <Bar key={c.id} dataKey={`v_${c.id}`} name={catLabel(c, catMap)} stackId="a" fill={c.color} />
               ))}
             </BarChart>
           </ResponsiveContainer>
@@ -93,7 +101,7 @@ export default function CategoryChart({ data }: Props) {
                 labelStyle={{ color: '#f1f5f9' }} />
               <Legend />
               {(categories || []).filter((c: any) => selectedCats.length === 0 || selectedCats.includes(c.id)).map((c: any) => (
-                <Line key={c.id} type="monotone" dataKey={c.name} name={c.name}
+                <Line key={c.id} type="monotone" dataKey={`v_${c.id}`} name={catLabel(c, catMap)}
                   stroke={c.color} strokeWidth={2} />
               ))}
             </LineChart>
@@ -112,9 +120,9 @@ export default function CategoryChart({ data }: Props) {
       for (const c of categories || []) {
         const catData = turn.categories[c.id]
         if (catData) {
-          row[`${c.name}_>=1`] = catData.prob_at_least_1
-          row[`${c.name}_>=2`] = catData.prob_at_least_2
-          row[`${c.name}_>=3`] = catData.prob_at_least_3
+          row[`p1_${c.id}`] = catData.prob_at_least_1
+          row[`p2_${c.id}`] = catData.prob_at_least_2
+          row[`p3_${c.id}`] = catData.prob_at_least_3
         }
       }
       return row
@@ -134,7 +142,7 @@ export default function CategoryChart({ data }: Props) {
                 labelStyle={{ color: '#f1f5f9' }} />
               <Legend />
               {(categories || []).filter((c: any) => selectedCats.length === 0 || selectedCats.includes(c.id)).map((c: any) => (
-                <Line key={c.id} type="monotone" dataKey={`${c.name}_>=1`} name={`${c.name} >=1`}
+                <Line key={c.id} type="monotone" dataKey={`p1_${c.id}`} name={`${catLabel(c, catMap)} >=1`}
                   stroke={c.color} strokeWidth={2} />
               ))}
             </LineChart>
@@ -206,7 +214,7 @@ export default function CategoryChart({ data }: Props) {
       const row: any = { turno: `T${tk}` }
       for (const c of categories || []) {
         if (turn.max_events && turn.max_events[c.id] !== undefined) {
-          row[c.name] = turn.max_events[c.id]
+          row[`m_${c.id}`] = turn.max_events[c.id]
         }
       }
       return row
@@ -226,7 +234,7 @@ export default function CategoryChart({ data }: Props) {
                 labelStyle={{ color: '#f1f5f9' }} />
               <Legend />
               {(categories || []).filter((c: any) => selectedCats.length === 0 || selectedCats.includes(c.id)).map((c: any) => (
-                <Bar key={c.id} dataKey={c.name} name={c.name} fill={c.color} />
+                <Bar key={c.id} dataKey={`m_${c.id}`} name={catLabel(c, catMap)} fill={c.color} />
               ))}
             </BarChart>
           </ResponsiveContainer>
@@ -242,23 +250,45 @@ function CategorySelector({ categories, selected, onToggle }: {
   categories: any[]; selected: number[]; onToggle: (id: number) => void
 }) {
   if (!categories || categories.length === 0) return null
+
+  const catMap = Object.fromEntries(categories.map(c => [c.id, c]))
+  const roots = categories.filter(c => !c.parent_id).sort((a, b) => a.name.localeCompare(b.name))
+  const getChildren = (pid: number) => categories.filter(c => c.parent_id === pid)
+
   return (
     <div className="flex flex-wrap gap-2">
-      {categories.map(c => (
-        <button key={c.id} onClick={() => onToggle(c.id)}
+      {roots.flatMap(root => [
+        <button key={root.id} onClick={() => onToggle(root.id)}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all border ${
-            selected.includes(c.id)
+            selected.includes(root.id)
               ? 'bg-slate-700 border-indigo-500 text-white'
               : selected.length === 0
               ? 'bg-slate-800/50 border-slate-600 text-magic-muted'
               : 'bg-slate-800/50 border-slate-600 text-magic-muted opacity-50'
           }`}
-          style={selected.includes(c.id) ? { borderColor: c.color } : {}}
+          style={selected.includes(root.id) ? { borderColor: root.color } : {}}
         >
-          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: c.color }} />
-          {c.name}
-        </button>
-      ))}
+          <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: root.color }} />
+          {root.name}
+        </button>,
+        ...getChildren(root.id).map(child => (
+          <button key={child.id} onClick={() => onToggle(child.id)}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all border ${
+              selected.includes(child.id)
+                ? 'bg-slate-700 border-indigo-500 text-white'
+                : selected.length === 0
+                ? 'bg-slate-800/50 border-slate-600 text-magic-muted'
+                : 'bg-slate-800/50 border-slate-600 text-magic-muted opacity-50'
+            }`}
+            style={selected.includes(child.id) ? { borderColor: child.color } : {}}
+          >
+            <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: child.color }} />
+            <span className="text-magic-muted/60 text-xs">{catMap[child.parent_id]?.name}</span>
+            <span className="mx-0.5 text-magic-muted/40">›</span>
+            {child.name}
+          </button>
+        )),
+      ])}
     </div>
   )
 }
@@ -267,6 +297,7 @@ function DataTable({ byTurn, categories, selectedCats }: {
   byTurn: any; categories: any[]; selectedCats: number[]
 }) {
   const turnKeys = Object.keys(byTurn).sort((a, b) => Number(a) - Number(b))
+  const catMap = Object.fromEntries((categories || []).map((c: any) => [c.id, c]))
   const visibleCats = (categories || []).filter((c: any) => selectedCats.length === 0 || selectedCats.includes(c.id))
 
   return (
@@ -280,7 +311,7 @@ function DataTable({ byTurn, categories, selectedCats }: {
               <th key={c.id} className="text-right py-2 px-2" colSpan={3}>
                 <span className="inline-flex items-center gap-1">
                   <div className="w-2 h-2 rounded-full" style={{ backgroundColor: c.color }} />
-                  {c.name}
+                  {catLabel(c, catMap)}
                 </span>
               </th>
             ))}

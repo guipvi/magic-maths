@@ -68,6 +68,14 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
     n_cats = len(cat_ids)
     cat_index = {cid: i for i, cid in enumerate(cat_ids)}
 
+    # Build parent<->child mapping for hierarchy rollup
+    cat_parent = {c['id']: c.get('parent_id') for c in categories}
+    child_ids_of = {}
+    for c in categories:
+        pid = c.get('parent_id')
+        if pid is not None:
+            child_ids_of.setdefault(pid, []).append(c['id'])
+
     # Count cards per category
     direct_count = np.zeros(n_cats, dtype=int)
     direct_weight = np.zeros(n_cats)  # sum of multipliers (unlimited)
@@ -88,6 +96,16 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
             if mpt is not None and mpt > 0:
                 assignment_caps.append((cid, mpt))
                 max_per_turn_by_cat[idx] += mpt
+            # Roll up to parent categories
+            pid = cat_parent.get(cid)
+            while pid is not None:
+                if pid in cat_index:
+                    pidx = cat_index[pid]
+                    direct_count[pidx] += 1
+                    direct_weight[pidx] += mult
+                    if mpt is not None and mpt > 0:
+                        max_per_turn_by_cat[pidx] += mpt
+                pid = cat_parent.get(pid)
 
     # Build resource links: each category trigger is a flow from src to tgt
     # Processed in order, each unit of src consumed produces `count` units of tgt
@@ -267,6 +285,7 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
             'id': cid,
             'name': c['name'],
             'color': c.get('color', '#6366f1'),
+            'parent_id': c.get('parent_id'),
             'cards_assigned': int(direct_count[idx]),
             'total_multiplier_sum': round(float(direct_weight[idx]), 1),
             'max_per_turn_total': float(max_per_turn_by_cat[idx]) if max_per_turn_by_cat[idx] > 0 else None,
