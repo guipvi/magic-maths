@@ -9,6 +9,9 @@ DEFAULT_CATEGORIES = [
      'config': {'type': 'draw', 'description': 'Compra cartas'}},
     {'name': 'alcance', 'color': '#a855f7',
      'config': {'type': 'alcance', 'description': 'Draw + scry + filtragem'}},
+    {'name': 'tutor', 'color': '#ec4899',
+     'config': {'type': 'tutor', 'description': 'Busca carta do grimório'}},
+    # Interaction categories (root, with subcategories for target types)
     {'name': 'destroy', 'color': '#ef4444',
      'config': {'type': 'interaction', 'description': 'Destrói permanentes'}},
     {'name': 'exile', 'color': '#8b5cf6',
@@ -19,24 +22,103 @@ DEFAULT_CATEGORIES = [
      'config': {'type': 'interaction', 'description': 'Anula mágicas'}},
     {'name': 'damage', 'color': '#f97316',
      'config': {'type': 'interaction', 'description': 'Dano a alvos'}},
-    {'name': 'graveyard', 'color': '#10b981',
+    {'name': 'graveyard hate', 'color': '#10b981',
      'config': {'type': 'interaction', 'description': 'Hate ao cemitério'}},
     {'name': 'tuck', 'color': '#fbbf24',
      'config': {'type': 'interaction', 'description': 'Coloca no fundo do grimório'}},
-    {'name': 'tutor', 'color': '#ec4899',
-     'config': {'type': 'tutor', 'description': 'Busca carta do grimório'}},
+]
+
+DEFAULT_SUBCATEGORIES: list[dict] = [
+    # destroy targets
+    {'name': 'permanente', 'parent_name': 'destroy', 'color': '#fca5a5',
+     'config': {'type': 'destroy', 'description': 'Qualquer permanente'}},
+    {'name': 'não-criatura', 'parent_name': 'destroy', 'color': '#f87171',
+     'config': {'type': 'destroy', 'description': 'Permanente que não seja criatura'}},
+    {'name': 'criatura', 'parent_name': 'destroy', 'color': '#ef4444',
+     'config': {'type': 'destroy', 'description': 'Criatura'}},
+    # exile targets
+    {'name': 'permanente', 'parent_name': 'exile', 'color': '#c4b5fd',
+     'config': {'type': 'exile', 'description': 'Qualquer permanente'}},
+    {'name': 'não-criatura', 'parent_name': 'exile', 'color': '#a78bfa',
+     'config': {'type': 'exile', 'description': 'Permanente que não seja criatura'}},
+    {'name': 'criatura', 'parent_name': 'exile', 'color': '#8b5cf6',
+     'config': {'type': 'exile', 'description': 'Criatura'}},
+    {'name': 'cemitério', 'parent_name': 'exile', 'color': '#7c3aed',
+     'config': {'type': 'exile', 'description': 'Exila do cemitério'}},
+    # bounce targets
+    {'name': 'não-terreno', 'parent_name': 'bounce', 'color': '#7dd3fc',
+     'config': {'type': 'bounce', 'description': 'Permanente que não seja terreno'}},
+    {'name': 'criatura', 'parent_name': 'bounce', 'color': '#38bdf8',
+     'config': {'type': 'bounce', 'description': 'Criatura'}},
+    # counter targets
+    {'name': 'mágica', 'parent_name': 'counter', 'color': '#a5b4fc',
+     'config': {'type': 'counter', 'description': 'Qualquer mágica'}},
+    {'name': 'não-criatura', 'parent_name': 'counter', 'color': '#818cf8',
+     'config': {'type': 'counter', 'description': 'Mágica que não seja criatura'}},
+    # damage targets
+    {'name': 'qualquer', 'parent_name': 'damage', 'color': '#fdba74',
+     'config': {'type': 'damage', 'description': 'Qualquer alvo'}},
+    {'name': 'criatura', 'parent_name': 'damage', 'color': '#f97316',
+     'config': {'type': 'damage', 'description': 'Criatura'}},
+    {'name': 'planeswalker', 'parent_name': 'damage', 'color': '#ea580c',
+     'config': {'type': 'damage', 'description': 'Planeswalker'}},
+    # graveyard hate targets
+    {'name': 'cemitério', 'parent_name': 'graveyard hate', 'color': '#34d399',
+     'config': {'type': 'graveyard hate', 'description': 'Cemitério'}},
+    # tuck targets
+    {'name': 'qualquer', 'parent_name': 'tuck', 'color': '#fde68a',
+     'config': {'type': 'tuck', 'description': 'Qualquer alvo'}},
+    {'name': 'não-terreno', 'parent_name': 'tuck', 'color': '#fbbf24',
+     'config': {'type': 'tuck', 'description': 'Permanente que não seja terreno'}},
 ]
 
 
 def seed_default_categories():
+    # Migration: clear parent_id and is_default from old "interaction" parent
+    old_interaction = Category.query.filter_by(name='interaction', is_default=True).first()
+    if old_interaction:
+        for child in old_interaction.children[:]:
+            child.parent_id = None
+        db.session.delete(old_interaction)
+
+    # Migration: rename "graveyard" -> "graveyard hate" if old name exists
+    old_gy = Category.query.filter_by(name='graveyard').first()
+    if old_gy:
+        if not Category.query.filter_by(name='graveyard hate').first():
+            old_gy.name = 'graveyard hate'
+            old_gy.config = {'type': 'interaction', 'description': 'Hate ao cemitério'}
+        else:
+            # "graveyard hate" already exists — move any assignments to it
+            existing_gy_hate = Category.query.filter_by(name='graveyard hate').first()
+            for child in old_gy.children[:]:
+                child.parent_id = existing_gy_hate.id
+            db.session.delete(old_gy)
+
     for cat_data in DEFAULT_CATEGORIES:
         existing = Category.query.filter_by(name=cat_data['name']).first()
         if existing:
             if not existing.is_default:
                 existing.is_default = True
+            existing.parent_id = None  # ensure root
         else:
             cat = Category(name=cat_data['name'], color=cat_data['color'],
                            config=cat_data['config'], is_default=True)
+            db.session.add(cat)
+    db.session.flush()
+
+    for sub_data in DEFAULT_SUBCATEGORIES:
+        parent = Category.query.filter_by(name=sub_data['parent_name']).first()
+        if not parent:
+            continue
+        existing = Category.query.filter_by(name=sub_data['name'], parent_id=parent.id).first()
+        if existing:
+            existing.config = sub_data['config']
+            existing.color = sub_data['color']
+            existing.is_default = True
+        else:
+            cat = Category(name=sub_data['name'], color=sub_data['color'],
+                           config=sub_data['config'], is_default=True,
+                           parent_id=parent.id)
             db.session.add(cat)
     db.session.commit()
 
@@ -49,8 +131,22 @@ def get_category(category_id):
     return Category.query.get(category_id)
 
 
-def create_category(name, color='#6366f1', config=None):
-    cat = Category(name=name, color=color, config=config or {})
+def get_category_tree():
+    """Return categories organized as a tree (roots with nested children)."""
+    roots = Category.query.filter_by(parent_id=None).order_by(Category.name).all()
+    return [r.to_dict_tree() for r in roots]
+
+
+def get_root_categories():
+    return Category.query.filter_by(parent_id=None).order_by(Category.name).all()
+
+
+def get_child_categories(parent_id):
+    return Category.query.filter_by(parent_id=parent_id).order_by(Category.name).all()
+
+
+def create_category(name, color='#6366f1', config=None, parent_id=None):
+    cat = Category(name=name, color=color, config=config or {}, parent_id=parent_id)
     db.session.add(cat)
     db.session.commit()
     return cat
@@ -74,6 +170,8 @@ def delete_category(category_id):
         return False
     if cat.is_default:
         return False
+    if cat.children:
+        return None  # signal: has children, can't delete
     db.session.delete(cat)
     db.session.commit()
     return True

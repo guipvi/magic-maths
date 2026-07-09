@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'react'
 import { categories as api } from '../services/api'
-import { Plus, Trash2, Tag, Zap, Link2 } from 'lucide-react'
+import { Plus, Trash2, Tag, Zap, Link2, Pencil, Check, X } from 'lucide-react'
+
+function catLabel(c: any, allCats: any[]): string {
+  if (c.parent_id) {
+    const parent = allCats.find(p => p.id === c.parent_id)
+    if (parent) return `${parent.name} › ${c.name}`
+  }
+  return c.name
+}
 
 interface Props {
   deckId: string
@@ -31,6 +39,10 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
       setCardTriggers(ctRes.data)
     }).finally(() => setLoading(false))
   }, [deckId])
+
+  const refreshCategories = () => {
+    api.list().then(r => setAllCategories(r.data))
+  }
 
   const refreshAssignments = () => {
     api.getAssignments(deckId).then(r => setAssignments(r.data))
@@ -72,7 +84,7 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
       </div>
 
       {activeTab === 'categories' && (
-        <CategoryManager categories={allCategories} setCategories={setAllCategories} />
+        <CategoryManager categories={allCategories} onRefresh={refreshCategories} />
       )}
       {activeTab === 'assign' && (
         <AssignmentManager
@@ -97,51 +109,149 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
   )
 }
 
-function CategoryManager({ categories, setCategories }: { categories: any[], setCategories: (c: any[]) => void }) {
+function CategoryManager({ categories, onRefresh }: { categories: any[], onRefresh: () => void }) {
   const [newName, setNewName] = useState('')
   const [newColor, setNewColor] = useState('#6366f1')
+  const [newParentId, setNewParentId] = useState<number | ''>('')
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editColor, setEditColor] = useState('#6366f1')
+  const [error, setError] = useState('')
+
+  const rootCategories = categories.filter(c => !c.parent_id)
+  const getChildren = (parentId: number) => categories.filter(c => c.parent_id === parentId)
 
   const handleCreate = async () => {
     if (!newName.trim()) return
-    const res = await api.create({ name: newName.trim(), color: newColor })
-    setCategories([...categories, res.data])
-    setNewName('')
+    setError('')
+    try {
+      await api.create({
+        name: newName.trim(),
+        color: newColor,
+        parent_id: newParentId === '' ? null : Number(newParentId),
+      })
+      onRefresh()
+      setNewName('')
+      setNewParentId('')
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Erro ao criar')
+    }
   }
 
   const handleDelete = async (id: number) => {
-    await api.delete(id)
-    setCategories(categories.filter(c => c.id !== id))
+    try {
+      await api.delete(id)
+      onRefresh()
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Erro ao deletar')
+    }
+  }
+
+  const startEditing = (cat: any) => {
+    setEditingId(cat.id)
+    setEditName(cat.name)
+    setEditColor(cat.color)
+  }
+
+  const cancelEditing = () => {
+    setEditingId(null)
+  }
+
+  const saveEditing = async () => {
+    if (!editName.trim() || editingId === null) return
+    setError('')
+    try {
+      await api.update(editingId, { name: editName.trim(), color: editColor })
+      setEditingId(null)
+      onRefresh()
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Erro ao salvar')
+    }
+  }
+
+  const renderCategory = (cat: any, depth: number = 0) => {
+    const children = getChildren(cat.id)
+    const isEditing = editingId === cat.id
+
+    return (
+      <div key={cat.id}>
+        <div className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg"
+          style={{ marginLeft: depth * 24 }}>
+          {isEditing ? (
+            <div className="flex items-center gap-2 flex-1">
+              <input type="color" value={editColor} onChange={e => setEditColor(e.target.value)}
+                className="w-8 h-8 rounded cursor-pointer bg-slate-700 border border-slate-600 shrink-0" />
+              <input type="text" value={editName} onChange={e => setEditName(e.target.value)}
+                className="input flex-1 min-w-0" />
+              <button onClick={saveEditing} className="btn btn-primary btn-sm flex items-center gap-1">
+                <Check className="w-3.5 h-3.5" />
+              </button>
+              <button onClick={cancelEditing}
+                className="btn btn-sm bg-slate-700 hover:bg-slate-600 text-magic-muted flex items-center gap-1">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="flex items-center gap-3">
+                <div className="w-4 h-4 rounded-full" style={{ backgroundColor: cat.color }} />
+                <span className="font-medium">{cat.name}</span>
+                <span className="text-xs text-magic-muted">{cat.config?.type || 'custom'}</span>
+                {cat.is_default && <span className="text-[10px] text-magic-muted bg-slate-700 px-1.5 py-0.5 rounded">default</span>}
+                {depth === 0 && children.length > 0 && (
+                  <span className="text-[10px] text-indigo-300">{children.length} subcategorias</span>
+                )}
+              </div>
+              <div className="flex items-center gap-1">
+                <button onClick={() => startEditing(cat)}
+                  className="text-indigo-400 hover:text-indigo-300 transition-colors">
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+                {!cat.is_default && (
+                  <button onClick={() => handleDelete(cat.id)}
+                    className="text-red-400 hover:text-red-300 transition-colors">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+        {children.length > 0 && (
+          <div className="mt-1 space-y-1">
+            {children.map(child => renderCategory(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (
     <div className="card">
       <h3 className="font-semibold mb-4">Categorias Globais</h3>
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap items-end">
         <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
-          placeholder="Nova categoria..." className="input flex-1" />
+          placeholder="Nova categoria..." className="input flex-1 min-w-[150px]" />
         <input type="color" value={newColor} onChange={e => setNewColor(e.target.value)}
-          className="w-10 h-10 rounded cursor-pointer bg-slate-700 border border-slate-600" />
+          className="w-10 h-10 rounded cursor-pointer bg-slate-700 border border-slate-600 shrink-0" />
+        <select value={newParentId} onChange={e => setNewParentId(e.target.value === '' ? '' : Number(e.target.value))}
+          className="input min-w-[140px]">
+          <option value="">Sem parente</option>
+          {rootCategories.map(cat => (
+            <option key={cat.id} value={cat.id}>{cat.name}</option>
+          ))}
+        </select>
         <button onClick={handleCreate} className="btn btn-primary flex items-center gap-1">
           <Plus className="w-4 h-4" /> Criar
         </button>
       </div>
-      <div className="space-y-2">
-        {categories.map(cat => (
-          <div key={cat.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
-            <div className="flex items-center gap-3">
-              <div className="w-4 h-4 rounded-full" style={{ backgroundColor: cat.color }} />
-              <span className="font-medium">{cat.name}</span>
-              <span className="text-xs text-magic-muted">{cat.config?.type || 'custom'}</span>
-              {cat.is_default && <span className="text-[10px] text-magic-muted bg-slate-700 px-1.5 py-0.5 rounded">default</span>}
-            </div>
-            {!cat.is_default && (
-              <button onClick={() => handleDelete(cat.id)}
-                className="text-red-400 hover:text-red-300 transition-colors">
-                <Trash2 className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        ))}
+      {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
+
+      <div className="space-y-1">
+        {rootCategories.map(cat => renderCategory(cat))}
+        {categories.length === 0 && (
+          <p className="text-sm text-magic-muted text-center py-4">Nenhuma categoria.</p>
+        )}
       </div>
     </div>
   )
@@ -222,7 +332,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
             className="input">
             <option value="">Selecionar categoria...</option>
             {categories.map(cat => (
-              <option key={cat.id} value={cat.id}>{cat.name}</option>
+              <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
             ))}
           </select>
           {isTutor ? (
@@ -306,7 +416,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
                     <div className="w-2 h-2 rounded-full" style={{
                       backgroundColor: categories.find(c => c.id === a.category_id)?.color
                     }} />
-                    {a.category_name}
+                    {catLabel(categories.find(c => c.id === a.category_id) || a, categories)}
                   </span>
                 </td>
                 <td className="py-2 px-2 text-right">{a.multiplier}</td>
@@ -431,7 +541,7 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
               <option value="">Selecionar...</option>
               {assignments.map(a => (
                 <option key={a.id} value={a.id}>
-                  {a.card_name} — {a.category_name}
+                  {a.card_name} — {catLabel(categories.find(c => c.id === a.category_id) || a, categories)}
                 </option>
               ))}
             </select>
@@ -443,7 +553,7 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
               className="input w-full mt-1">
               <option value="">Selecionar...</option>
               {categories.map(cat => (
-                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
               ))}
             </select>
           </div>
@@ -468,9 +578,9 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
               <div key={ct.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
                 <div className="flex items-center gap-3 text-sm">
                   <span className="font-medium text-indigo-300">{ct.card_name}</span>
-                  <span className="text-xs text-magic-muted">({ct.source_category_name})</span>
+                  <span className="text-xs text-magic-muted">({catLabel(categories.find(c => c.id === ct.source_category_id) || {parent_id: null, name: ct.source_category_name}, categories)})</span>
                   <span className="text-magic-muted">→ {ct.trigger_count}x →</span>
-                  <span className="font-medium text-green-300">{tgtCat?.name || ct.target_category_name}</span>
+                  <span className="font-medium text-green-300">{catLabel(tgtCat || {parent_id: null, name: ct.target_category_name}, categories)}</span>
                   {hasPerTurn && <span className="text-[10px] text-amber-400">por turno</span>}
                 </div>
                 <button onClick={() => handleRemoveCardTrigger(ct.id)}
@@ -499,7 +609,7 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
               className="input w-full mt-1">
               <option value="">Selecionar...</option>
               {categories.map(cat => (
-                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
               ))}
             </select>
           </div>
@@ -510,7 +620,7 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
               className="input w-full mt-1">
               <option value="">Selecionar...</option>
               {categories.map(cat => (
-                <option key={cat.id} value={cat.id}>{cat.name}</option>
+                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
               ))}
             </select>
           </div>
@@ -539,9 +649,9 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
             return (
               <div key={t.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
                 <div className="flex items-center gap-3 text-sm">
-                  <span className="font-medium text-indigo-300">{srcCat?.name || t.source_category_id}</span>
+                  <span className="font-medium text-indigo-300">{catLabel(srcCat || {parent_id: null, name: String(t.source_category_id)}, categories)}</span>
                   <span className="text-magic-muted">→ {t.trigger_count}x →</span>
-                  <span className="font-medium text-green-300">{tgtCat?.name || t.target_category_id}</span>
+                  <span className="font-medium text-green-300">{catLabel(tgtCat || {parent_id: null, name: String(t.target_category_id)}, categories)}</span>
                   {t.accumulate && <span className="text-[10px] text-amber-400">acumula</span>}
                 </div>
                 <button onClick={() => handleRemoveCatTrigger(t.id)}

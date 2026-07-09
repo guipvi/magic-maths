@@ -7,11 +7,14 @@ class Category(db.Model):
     __tablename__ = 'categories'
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    name = db.Column(db.String(64), unique=True, nullable=False)
+    name = db.Column(db.String(64), nullable=False)
     color = db.Column(db.String(7), default='#6366f1')
     config = db.Column(db.JSON, default=dict)
     is_default = db.Column(db.Boolean, default=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    parent = db.relationship('Category', remote_side='Category.id', backref='children')
 
     assignments = db.relationship('DeckCardCategory', backref='category', lazy='dynamic')
 
@@ -22,7 +25,13 @@ class Category(db.Model):
             'color': self.color,
             'config': self.config,
             'is_default': self.is_default,
+            'parent_id': self.parent_id,
         }
+
+    def to_dict_tree(self):
+        data = self.to_dict()
+        data['children'] = [c.to_dict_tree() for c in sorted(self.children, key=lambda x: x.name)]
+        return data
 
 
 class DeckCardCategory(db.Model):
