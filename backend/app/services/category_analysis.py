@@ -8,6 +8,8 @@ Replaces the linear-system approach with a resource-pool model where:
   - Card triggers produce events in target category (with per-turn overrides)
   - accumulate on limiter: unconsumed source carries over between turns
   - max_per_turn on assignment: caps events contributed by that card per turn
+  - containment: categories can contain others (parent-child + user-defined),
+    propagating rollup, wait_for, limiters, accumulate
 """
 
 import numpy as np
@@ -48,8 +50,29 @@ def _bivariate_hypergeom_pmf(N, K1, K2, n, k1, k2):
         return 0.0
 
 
+def _propagate_consumption(source_idx, consumed_amount, pool, cat_ids,
+                           cat_index, contained_by_map, direct_children_of):
+    """Propagate consumption from a source category to all its containers.
+
+    When events are consumed from a source, the corresponding diluted
+    events in all containers should also be removed (1/n dilution).
+    """
+    if consumed_amount <= 0:
+        return
+    source_cat_id = cat_ids[source_idx]
+    if source_cat_id not in contained_by_map:
+        return
+    for container_id in contained_by_map[source_cat_id]:
+        if container_id in cat_index:
+            cidx = cat_index[container_id]
+            n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+            if n_ch > 0:
+                pool[cidx] = max(0.0, pool[cidx] - consumed_amount / n_ch)
+
+
 def analyze_categories(deck_size, categories, assignments, max_turns=10,
-                       card_triggers=None, limiters=None):
+                       card_triggers=None, limiters=None, containment_map=None,
+                       direct_children_of=None):
     """
     categories: list of dicts [{'id', 'name', 'color', 'config'}]
     assignments: list of dicts [{'card_id', 'category_id', 'multiplier',
@@ -61,8 +84,16 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
     limiters: list of dicts [{'target_category_id', 'logic', 'source_category_ids',
                               'trigger_count', 'accumulate'}]
     deck_size: total number of cards in deck
+    containment_map: dict {cat_id: set of cat_ids it contains} from build_containment_graph()
+    direct_children_of: dict {cat_id: set of direct children} for 1/n dilution
 
     Returns: dict with per-turn analysis
+
+    Rollup uses two counters:
+      - direct_count: 1:1 rollup (used for hypergeometric probability and summary)
+      - effective_count/effective_weight: 1/n diluted rollup (used for pool calculation)
+        When an event rolls up to a superior category, it counts as 1/n where
+        n = number of direct children of the superior category.
     """
     cat_ids = [c['id'] for c in categories]
     cat_map = {c['id']: c for c in categories}
@@ -77,14 +108,20 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
         if pid is not None:
             child_ids_of.setdefault(pid, []).append(c['id'])
 
+    # Build containment reverse map: {cat_id: set of category_ids that contain it}
+    contained_by_map = {}  # cat_id -> set of cat_ids that contain it
+    if containment_map:
+        for cid, contained_set in containment_map.items():
+            for inner_id in contained_set:
+                contained_by_map.setdefault(inner_id, set()).add(cid)
+
     # Count cards per category
-    direct_count = np.zeros(n_cats, dtype=int)
-    direct_weight = np.zeros(n_cats)  # sum of multipliers (unlimited)
+    direct_count = np.zeros(n_cats, dtype=int)   # 1:1 rollup (for hypergeom + summary)
+    effective_count = np.zeros(n_cats)            # 1/n diluted rollup (for pool)
+    direct_weight = np.zeros(n_cats)              # 1:1 rollup (for summary)
+    effective_weight = np.zeros(n_cats)           # 1/n diluted rollup (for pool)
     max_per_turn_cat = {}  # category_id -> total max_per_turn from assignments
     max_per_turn_by_cat = np.zeros(n_cats)  # same in indexed form
-    
-    # Track per-assignment max_per_turn
-    assignment_caps = []  # list of (category_id, max_per_turn) per assignment copy
 
     # Track wait_for info per assignment: index -> list of wait_for_category_ids
     wait_for_by_idx = {}  # cat_idx -> list of (wait_for_cat_indices)
@@ -94,29 +131,62 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
         if cid in cat_index:
             idx = cat_index[cid]
             direct_count[idx] += 1
+            effective_count[idx] += 1
             mult = assn.get('mana_amount') if assn.get('mana_amount') is not None else assn.get('multiplier', 1.0)
             direct_weight[idx] += mult
+            effective_weight[idx] += mult
             mpt = assn.get('max_per_turn')
             if mpt is not None and mpt > 0:
-                assignment_caps.append((cid, mpt))
                 max_per_turn_by_cat[idx] += mpt
-            # Roll up to parent categories
+            # Roll up to parent categories (1:1 for direct_count, 1/n for effective)
             pid = cat_parent.get(cid)
             while pid is not None:
                 if pid in cat_index:
                     pidx = cat_index[pid]
                     direct_count[pidx] += 1
                     direct_weight[pidx] += mult
+                    n_children = len(direct_children_of.get(pid, set())) if direct_children_of else 0
+                    if n_children > 0:
+                        effective_count[pidx] += 1.0 / n_children
+                        effective_weight[pidx] += mult / n_children
+                    else:
+                        effective_count[pidx] += 1
+                        effective_weight[pidx] += mult
                     if mpt is not None and mpt > 0:
                         max_per_turn_by_cat[pidx] += mpt
                 pid = cat_parent.get(pid)
 
-            # Store wait_for info
+            # Roll up through containment (1:1 for direct_count, 1/n for effective)
+            if cid in contained_by_map:
+                for container_id in contained_by_map[cid]:
+                    if container_id in cat_index and container_id != cid:
+                        cidx = cat_index[container_id]
+                        direct_count[cidx] += 1
+                        direct_weight[cidx] += mult
+                        n_children = len(direct_children_of.get(container_id, set())) if direct_children_of else 0
+                        if n_children > 0:
+                            effective_count[cidx] += 1.0 / n_children
+                            effective_weight[cidx] += mult / n_children
+                        else:
+                            effective_count[cidx] += 1
+                            effective_weight[cidx] += mult
+                        if mpt is not None and mpt > 0:
+                            max_per_turn_by_cat[cidx] += mpt
+
+            # Store wait_for info (expanded via containment)
             wf_cats = assn.get('wait_for_category_ids')
             if wf_cats:
-                wf_indices = [cat_index[wc] for wc in wf_cats if wc in cat_index]
+                wf_indices = set()
+                for wc in wf_cats:
+                    if wc in cat_index:
+                        wf_indices.add(cat_index[wc])
+                    # Also include all categories that contain this wait_for target
+                    if wc in contained_by_map:
+                        for container_id in contained_by_map[wc]:
+                            if container_id in cat_index:
+                                wf_indices.add(cat_index[container_id])
                 if wf_indices:
-                    wait_for_by_idx.setdefault(idx, []).append(wf_indices)
+                    wait_for_by_idx.setdefault(idx, []).append(list(wf_indices))
 
     # Identify draw category indices for iterative draw feedback
     draw_indices = set()
@@ -142,16 +212,14 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                 for i in range(n_cats)
             ])
 
-            # 2. Expected direct events (weighted by multiplier)
+            # 2. Expected direct events (weighted by diluted effective weight)
             pool = np.zeros(n_cats)
             for i in range(n_cats):
-                if direct_count[i] > 0:
-                    avg_mult = direct_weight[i] / direct_count[i]
-                    raw = expected_direct_cards[i] * avg_mult
-                    if max_per_turn_by_cat[i] > 0:
-                        pool[i] = min(raw, max_per_turn_by_cat[i])
-                    else:
-                        pool[i] = raw
+                raw = n_drawn * effective_weight[i] / deck_size if deck_size > 0 else 0.0
+                if max_per_turn_by_cat[i] > 0:
+                    pool[i] = min(raw, max_per_turn_by_cat[i])
+                else:
+                    pool[i] = raw
 
             # 2a. Wait-for probability gate: multiply pool by P(wait_for satisfied)
             nd_int = int(n_drawn)
@@ -199,7 +267,17 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         continue
                     tgt_idx = cat_index[tgt]
                     sources = lim.get('source_category_ids', [])
-                    src_indices = [cat_index[s] for s in sources if s in cat_index]
+                    # Expand source categories through containment
+                    expanded_sources = set()
+                    for s in sources:
+                        if s in cat_index:
+                            expanded_sources.add(cat_index[s])
+                            # Also include all categories contained by this source
+                            if containment_map and s in containment_map:
+                                for contained_id in containment_map[s]:
+                                    if contained_id in cat_index:
+                                        expanded_sources.add(cat_index[contained_id])
+                    src_indices = list(expanded_sources)
                     if not src_indices:
                         continue
                     count = lim.get('trigger_count', 1)
@@ -221,7 +299,10 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         ratio = consumed_total / total_available
                         for s in src_indices:
                             if pool[s] > 0:
-                                pool[s] *= (1.0 - ratio)
+                                consumed_from_s = pool[s] * ratio
+                                pool[s] -= consumed_from_s
+                                _propagate_consumption(s, consumed_from_s, pool, cat_ids,
+                                                       cat_index, contained_by_map, direct_children_of)
                         pool[tgt_idx] += consumed_total * count
                     elif logic == 'AND':
                         avail = [pool[s] for s in src_indices if pool[s] > 0]
@@ -232,6 +313,8 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         per_source_actual = consumed_total / len(src_indices)
                         for s in src_indices:
                             pool[s] -= per_source_actual
+                            _propagate_consumption(s, per_source_actual, pool, cat_ids,
+                                                   cat_index, contained_by_map, direct_children_of)
                         pool[tgt_idx] += consumed_total * count
 
             # Check convergence: extra draws from draw categories
@@ -254,6 +337,12 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         s_idx = cat_index[src_id]
                         if pool[s_idx] > 0:
                             surplus[s_idx] = pool[s_idx]
+                            # Propagate surplus to containers
+                            if src_id in contained_by_map:
+                                for container_id in contained_by_map[src_id]:
+                                    if container_id in cat_index:
+                                        cidx = cat_index[container_id]
+                                        surplus[cidx] = max(surplus[cidx], pool[s_idx])
 
         # 7. Probability distribution for each category
         category_probs = {}
@@ -278,7 +367,7 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                 probs[f'prob_at_least_{thresh}'] = round(float(prob), 4)
 
             category_probs[cid] = {
-                'expected': round(float(expected_direct_cards[i] * (direct_weight[i] / K if K > 0 else 0)), 2),
+                'expected': round(float(n_drawn * effective_weight[i] / deck_size if deck_size > 0 else 0.0), 2),
                 'total_expected': round(float(pool[i]), 2),
                 'pool': round(float(pool[i]), 2),
                 'card_triggered': round(float(card_trigger_base[i]), 2),

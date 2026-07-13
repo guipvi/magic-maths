@@ -5,11 +5,13 @@ from app.models.deck import Deck
 from app.models.card import Card
 from app.services.category_service import (
     seed_default_categories, get_all_categories, get_category,
-    create_category, update_category, delete_category,
+    get_category_tree, create_category, update_category, delete_category,
     get_deck_assignments, set_card_assignment, remove_card_assignment,
     get_deck_card_triggers, set_card_trigger, remove_card_trigger,
     get_deck_limiters, set_limiter, remove_limiter,
     set_assignment_wait_fors,
+    build_containment_graph, get_containment_edges, add_containment,
+    remove_containment,
 )
 
 categories_bp = Blueprint('categories', __name__)
@@ -253,3 +255,40 @@ def get_wait_for(deck_id, assignment_id):
         'category_id': wf.category_id,
         'category_name': wf.category.name if wf.category else None,
     } for wf in wait_fors])
+
+
+# --- Category Containment ---
+
+@categories_bp.route('/containment', methods=['GET'])
+@jwt_required()
+def list_containment():
+    edges = get_containment_edges()
+    return jsonify(edges)
+
+
+@categories_bp.route('/containment', methods=['POST'])
+@jwt_required()
+def create_containment():
+    data = request.get_json()
+    if not data or not data.get('container_category_id') or not data.get('contained_category_id'):
+        return jsonify({'error': 'container_category_id and contained_category_id required'}), 400
+    try:
+        edge = add_containment(
+            data['container_category_id'],
+            data['contained_category_id'],
+        )
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
+    return jsonify({
+        'id': edge.id,
+        'container_category_id': edge.container_category_id,
+        'contained_category_id': edge.contained_category_id,
+    }), 201
+
+
+@categories_bp.route('/containment/<int:containment_id>', methods=['DELETE'])
+@jwt_required()
+def delete_containment(containment_id):
+    if remove_containment(containment_id):
+        return jsonify({'ok': True})
+    return jsonify({'error': 'Containment not found'}), 404

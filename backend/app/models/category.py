@@ -187,3 +187,29 @@ class DeckAssignmentWaitFor(db.Model):
         db.UniqueConstraint('assignment_id', 'category_id',
                             name='uq_assignment_wait_for'),
     )
+
+
+class CategoryContainment(db.Model):
+    __tablename__ = 'category_containments'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    container_category_id = db.Column(db.Integer,
+                                      db.ForeignKey('categories.id'),
+                                      nullable=False)
+    contained_category_id = db.Column(db.Integer,
+                                      db.ForeignKey('categories.id'),
+                                      nullable=False)
+
+    container = db.relationship('Category',
+                                foreign_keys=[container_category_id],
+                                backref='contained_by')
+    contained = db.relationship('Category',
+                                foreign_keys=[contained_category_id],
+                                backref='contains')
+
+    __table_args__ = (
+        db.UniqueConstraint('container_category_id', 'contained_category_id',
+                            name='uq_category_containment'),
+        db.CheckConstraint('container_category_id != contained_category_id',
+                           name='ck_no_self_containment'),
+    )

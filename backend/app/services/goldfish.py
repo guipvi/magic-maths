@@ -76,8 +76,12 @@ def _build_card_trigger_map(card_triggers):
     return dict(card_trigger_map)
 
 
-def _build_wait_for_map(assignments, categories):
-    """Build card_id -> set of wait_for_category_ids from assignments."""
+def _build_wait_for_map(assignments, categories, contained_by_map=None):
+    """Build card_id -> set of wait_for_category_ids from assignments.
+
+    If contained_by_map is provided, expand wait_for categories to include
+    all categories that contain them (transitively).
+    """
     wait_for_map = {}
     if not assignments:
         return wait_for_map
@@ -85,7 +89,12 @@ def _build_wait_for_map(assignments, categories):
         card_id = a.get('card_id')
         wf = a.get('wait_for_category_ids')
         if card_id and wf:
-            wait_for_map[card_id] = set(wf)
+            expanded = set(wf)
+            if contained_by_map:
+                for wf_cat in wf:
+                    if wf_cat in contained_by_map:
+                        expanded.update(contained_by_map[wf_cat])
+            wait_for_map[card_id] = expanded
     return wait_for_map
 
 
@@ -107,7 +116,8 @@ def _check_wait_for(card_id, battlefield, wait_for_map, card_to_categories):
 
 def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                        assignments=None, categories=None,
-                       card_triggers=None, limiters=None):
+                       card_triggers=None, limiters=None,
+                       containment_map=None, direct_children_of=None):
     if deck_size is None:
         deck_size = sum(c.get('quantity', 1) for c in deck_cards)
 
@@ -122,7 +132,15 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
 
     cat_map = _build_category_map(assignments, categories)
     card_trigger_map = _build_card_trigger_map(card_triggers)
-    wait_for_map = _build_wait_for_map(assignments, categories)
+
+    # Build contained_by_map for reverse containment lookup
+    contained_by_map = {}
+    if containment_map:
+        for cid, contained_set in containment_map.items():
+            for inner_id in contained_set:
+                contained_by_map.setdefault(inner_id, set()).add(cid)
+
+    wait_for_map = _build_wait_for_map(assignments, categories, contained_by_map)
 
     card_to_categories = defaultdict(set)
     if assignments:
@@ -302,6 +320,18 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                 if cap > 0:
                                     needed = max(0, cap) / count if count > 0 else 0
                                 consumed = min(total_available, needed) if needed != float('inf') else total_available
+                                ratio = consumed / total_available if total_available > 0 else 0
+                                for s in src_ids:
+                                    se = source_events.get(s, 0)
+                                    if se > 0:
+                                        consumed_from_s = se * ratio
+                                        source_events[s] -= consumed_from_s
+                                        # Propagate consumption to containers
+                                        if s in contained_by_map:
+                                            for container_id in contained_by_map[s]:
+                                                n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                                if n_ch > 0:
+                                                    source_events[container_id] = max(0, source_events.get(container_id, 0) - consumed_from_s / n_ch)
                                 produced = consumed * count
                                 if cat_type_by_id.get(tgt_cat_id) == 'draw':
                                     limiter_draws += produced
@@ -315,6 +345,15 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                 if cap > 0:
                                     needed = max(0, cap) / count if count > 0 else 0
                                 consumed_total = min(per_source * len(src_ids), needed) if needed != float('inf') else per_source * len(src_ids)
+                                per_source_actual = consumed_total / len(src_ids)
+                                for s in src_ids:
+                                    source_events[s] -= per_source_actual
+                                    # Propagate consumption to containers
+                                    if s in contained_by_map:
+                                        for container_id in contained_by_map[s]:
+                                            n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                            if n_ch > 0:
+                                                source_events[container_id] = max(0, source_events.get(container_id, 0) - per_source_actual / n_ch)
                                 produced = consumed_total * count
                                 if cat_type_by_id.get(tgt_cat_id) == 'draw':
                                     limiter_draws += produced

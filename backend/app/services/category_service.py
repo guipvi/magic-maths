@@ -1,7 +1,9 @@
+from collections import defaultdict
 from app.extensions import db
 from app.models.category import (Category, DeckCardCategory,
                                   DeckCardTrigger, DeckCategoryEventLimiter,
-                                  DeckCategoryEventLimiterSource, DeckAssignmentWaitFor)
+                                  DeckCategoryEventLimiterSource, DeckAssignmentWaitFor,
+                                  CategoryContainment)
 
 
 DEFAULT_CATEGORIES = [
@@ -407,3 +409,152 @@ def set_assignment_wait_fors(assignment_id, category_ids):
             category_id=cat_id,
         ))
     db.session.commit()
+
+
+# --- Category Containment ---
+
+def build_containment_graph():
+    """Build transitive closure of containment.
+
+    Combines two sources:
+      1. Parent-child hierarchy (parent contains child, transitive)
+      2. User-defined CategoryContainment rows
+
+    Returns:
+        contains_map: {cat_id: set of all cat_ids that it contains}
+        contained_by_map: {cat_id: set of all cat_ids that contain it}
+        direct_contains: {cat_id: set of directly contained cat_ids (user-defined only)}
+        direct_children_of: {cat_id: set of direct children (parent-child + user-defined)}
+    """
+    all_cats = Category.query.all()
+    cat_ids = [c.id for c in all_cats]
+
+    # Build adjacency from parent-child: parent contains child
+    children_of = defaultdict(set)
+    for c in all_cats:
+        if c.parent_id is not None:
+            children_of[c.parent_id].add(c.id)
+
+    # Build adjacency from user-defined containment
+    containment_rows = CategoryContainment.query.all()
+    user_edges = defaultdict(set)
+    for row in containment_rows:
+        user_edges[row.container_category_id].add(row.contained_category_id)
+
+    # Merge into single adjacency list
+    forward = defaultdict(set)
+    for pid, cids in children_of.items():
+        forward[pid].update(cids)
+    for pid, cids in user_edges.items():
+        forward[pid].update(cids)
+
+    # Compute transitive closure via BFS from each node
+    contains_map = {}
+    for start in cat_ids:
+        visited = set()
+        queue = [start]
+        while queue:
+            node = queue.pop(0)
+            for nxt in forward.get(node, []):
+                if nxt not in visited and nxt != start:
+                    visited.add(nxt)
+                    queue.append(nxt)
+        contains_map[start] = visited
+
+    # Invert for contained_by_map
+    contained_by_map = defaultdict(set)
+    for cid, contained_set in contains_map.items():
+        for inner in contained_set:
+            contained_by_map[inner].add(cid)
+
+    # Only user-defined direct edges (for display/API)
+    direct_contains = defaultdict(set)
+    for row in containment_rows:
+        direct_contains[row.container_category_id].add(row.contained_category_id)
+
+    return contains_map, dict(contained_by_map), direct_contains, dict(forward)
+
+
+def get_containment_edges():
+    """Return all user-defined containment edges as dicts."""
+    rows = CategoryContainment.query.all()
+    result = []
+    for r in rows:
+        result.append({
+            'id': r.id,
+            'container_category_id': r.container_category_id,
+            'container_category_name': r.container.name if r.container else None,
+            'contained_category_id': r.contained_category_id,
+            'contained_category_name': r.contained.name if r.contained else None,
+        })
+    return result
+
+
+def add_containment(container_id, contained_id):
+    """Add a containment relationship. Raises ValueError on cycle or self-containment."""
+    if container_id == contained_id:
+        raise ValueError('Cannot contain itself')
+
+    existing = (CategoryContainment.query
+                .filter_by(container_category_id=container_id,
+                           contained_category_id=contained_id)
+                .first())
+    if existing:
+        return existing
+
+    # Check for cycles: if contained already contains container (transitively)
+    contains_map, _, _, _ = build_containment_graph()
+    if container_id in contains_map.get(contained_id, set()):
+        raise ValueError('Adding this containment would create a cycle')
+
+    edge = CategoryContainment(
+        container_category_id=container_id,
+        contained_category_id=contained_id,
+    )
+    db.session.add(edge)
+    db.session.commit()
+    return edge
+
+
+def remove_containment(containment_id):
+    """Remove a containment edge by id."""
+    edge = CategoryContainment.query.get(containment_id)
+    if not edge:
+        return False
+    db.session.delete(edge)
+    db.session.commit()
+    return True
+
+
+def expand_category_ids(cat_ids, contains_map):
+    """Expand a set of category IDs using the containment closure.
+
+    Given a set of explicit category IDs, returns the full set including
+    all categories that contain them (i.e. parents, grandparents, and
+    user-defined containers).
+
+    Args:
+        cat_ids: iterable of category IDs
+        contains_map: {cat_id: set of contained cat_ids} from build_containment_graph()
+
+    Returns:
+        set of category IDs (original + all containers)
+    """
+    result = set(cat_ids)
+    for cid in cat_ids:
+        # Find all categories that contain this one
+        for container_id, contained_set in contains_map.items():
+            if cid in contained_set:
+                result.add(container_id)
+    return result
+
+
+def get_all_contained(cat_ids, contains_map):
+    """Given explicit category IDs, return all categories they contain (transitively).
+
+    Unlike expand_category_ids, this goes DOWN the hierarchy.
+    """
+    result = set()
+    for cid in cat_ids:
+        result.update(contains_map.get(cid, set()))
+    return result
