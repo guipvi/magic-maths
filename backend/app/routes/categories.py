@@ -272,10 +272,14 @@ def create_containment():
     data = request.get_json()
     if not data or not data.get('container_category_id') or not data.get('contained_category_id'):
         return jsonify({'error': 'container_category_id and contained_category_id required'}), 400
+    mode = data.get('mode', 'subcategoria')
+    if mode not in ('subcategoria', 'ao_mesmo_tempo'):
+        return jsonify({'error': 'mode must be "subcategoria" or "ao_mesmo_tempo"'}), 400
     try:
         edge = add_containment(
             data['container_category_id'],
             data['contained_category_id'],
+            mode=mode,
         )
     except ValueError as e:
         return jsonify({'error': str(e)}), 400
@@ -283,6 +287,7 @@ def create_containment():
         'id': edge.id,
         'container_category_id': edge.container_category_id,
         'contained_category_id': edge.contained_category_id,
+        'mode': edge.mode or 'subcategoria',
     }), 201
 
 

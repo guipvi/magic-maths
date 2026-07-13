@@ -199,6 +199,7 @@ class CategoryContainment(db.Model):
     contained_category_id = db.Column(db.Integer,
                                       db.ForeignKey('categories.id'),
                                       nullable=False)
+    mode = db.Column(db.String(20), default='subcategoria')
 
     container = db.relationship('Category',
                                 foreign_keys=[container_category_id],

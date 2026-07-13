@@ -51,11 +51,17 @@ def _bivariate_hypergeom_pmf(N, K1, K2, n, k1, k2):
 
 
 def _propagate_consumption(source_idx, consumed_amount, pool, cat_ids,
-                           cat_index, contained_by_map, direct_children_of):
+                           cat_index, contained_by_map, direct_children_of,
+                           containment_modes=None):
     """Propagate consumption from a source category to all its containers.
 
     When events are consumed from a source, the corresponding diluted
-    events in all containers should also be removed (1/n dilution).
+    events in all containers should also be removed.
+
+    Dilution factor per edge:
+      - 'subcategoria': 1/n (n = number of direct children of the container)
+      - 'ao_mesmo_tempo': 1/1 (full weight, no dilution)
+      - hierarchy edges (no mode entry): 1/n (default)
     """
     if consumed_amount <= 0:
         return
@@ -65,14 +71,18 @@ def _propagate_consumption(source_idx, consumed_amount, pool, cat_ids,
     for container_id in contained_by_map[source_cat_id]:
         if container_id in cat_index:
             cidx = cat_index[container_id]
-            n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
-            if n_ch > 0:
-                pool[cidx] = max(0.0, pool[cidx] - consumed_amount / n_ch)
+            mode = (containment_modes or {}).get((container_id, source_cat_id))
+            if mode == 'ao_mesmo_tempo':
+                pool[cidx] = max(0.0, pool[cidx] - consumed_amount)
+            else:
+                n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                if n_ch > 0:
+                    pool[cidx] = max(0.0, pool[cidx] - consumed_amount / n_ch)
 
 
 def analyze_categories(deck_size, categories, assignments, max_turns=10,
                        card_triggers=None, limiters=None, containment_map=None,
-                       direct_children_of=None):
+                       direct_children_of=None, containment_modes=None):
     """
     categories: list of dicts [{'id', 'name', 'color', 'config'}]
     assignments: list of dicts [{'card_id', 'category_id', 'multiplier',
@@ -86,14 +96,16 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
     deck_size: total number of cards in deck
     containment_map: dict {cat_id: set of cat_ids it contains} from build_containment_graph()
     direct_children_of: dict {cat_id: set of direct children} for 1/n dilution
+    containment_modes: dict {(container_id, contained_id): mode} for user-defined edges
 
     Returns: dict with per-turn analysis
 
     Rollup uses two counters:
       - direct_count: 1:1 rollup (used for hypergeometric probability and summary)
-      - effective_count/effective_weight: 1/n diluted rollup (used for pool calculation)
-        When an event rolls up to a superior category, it counts as 1/n where
-        n = number of direct children of the superior category.
+      - effective_count/effective_weight: diluted rollup (used for pool calculation)
+        When an event rolls up to a superior category:
+          - subcategoria (or hierarchy): counts as 1/n where n = number of direct children
+          - ao_mesmo_tempo: counts as 1/1 (full weight, card IS both things)
     """
     cat_ids = [c['id'] for c in categories]
     cat_map = {c['id']: c for c in categories}
@@ -156,20 +168,25 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         max_per_turn_by_cat[pidx] += mpt
                 pid = cat_parent.get(pid)
 
-            # Roll up through containment (1:1 for direct_count, 1/n for effective)
+            # Roll up through containment (mode-aware dilution)
             if cid in contained_by_map:
                 for container_id in contained_by_map[cid]:
                     if container_id in cat_index and container_id != cid:
                         cidx = cat_index[container_id]
                         direct_count[cidx] += 1
                         direct_weight[cidx] += mult
-                        n_children = len(direct_children_of.get(container_id, set())) if direct_children_of else 0
-                        if n_children > 0:
-                            effective_count[cidx] += 1.0 / n_children
-                            effective_weight[cidx] += mult / n_children
-                        else:
+                        mode = (containment_modes or {}).get((container_id, cid))
+                        if mode == 'ao_mesmo_tempo':
                             effective_count[cidx] += 1
                             effective_weight[cidx] += mult
+                        else:
+                            n_children = len(direct_children_of.get(container_id, set())) if direct_children_of else 0
+                            if n_children > 0:
+                                effective_count[cidx] += 1.0 / n_children
+                                effective_weight[cidx] += mult / n_children
+                            else:
+                                effective_count[cidx] += 1
+                                effective_weight[cidx] += mult
                         if mpt is not None and mpt > 0:
                             max_per_turn_by_cat[cidx] += mpt
 
@@ -302,7 +319,8 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                                 consumed_from_s = pool[s] * ratio
                                 pool[s] -= consumed_from_s
                                 _propagate_consumption(s, consumed_from_s, pool, cat_ids,
-                                                       cat_index, contained_by_map, direct_children_of)
+                                                       cat_index, contained_by_map, direct_children_of,
+                                                       containment_modes)
                         pool[tgt_idx] += consumed_total * count
                     elif logic == 'AND':
                         avail = [pool[s] for s in src_indices if pool[s] > 0]
@@ -314,7 +332,8 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         for s in src_indices:
                             pool[s] -= per_source_actual
                             _propagate_consumption(s, per_source_actual, pool, cat_ids,
-                                                   cat_index, contained_by_map, direct_children_of)
+                                                   cat_index, contained_by_map, direct_children_of,
+                                                   containment_modes)
                         pool[tgt_idx] += consumed_total * count
 
             # Check convergence: extra draws from draw categories

@@ -117,7 +117,8 @@ def _check_wait_for(card_id, battlefield, wait_for_map, card_to_categories):
 def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                        assignments=None, categories=None,
                        card_triggers=None, limiters=None,
-                       containment_map=None, direct_children_of=None):
+                       containment_map=None, direct_children_of=None,
+                       containment_modes=None):
     if deck_size is None:
         deck_size = sum(c.get('quantity', 1) for c in deck_cards)
 
@@ -329,9 +330,13 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                         # Propagate consumption to containers
                                         if s in contained_by_map:
                                             for container_id in contained_by_map[s]:
-                                                n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
-                                                if n_ch > 0:
-                                                    source_events[container_id] = max(0, source_events.get(container_id, 0) - consumed_from_s / n_ch)
+                                                mode = (containment_modes or {}).get((container_id, s))
+                                                if mode == 'ao_mesmo_tempo':
+                                                    source_events[container_id] = max(0, source_events.get(container_id, 0) - consumed_from_s)
+                                                else:
+                                                    n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                                    if n_ch > 0:
+                                                        source_events[container_id] = max(0, source_events.get(container_id, 0) - consumed_from_s / n_ch)
                                 produced = consumed * count
                                 if cat_type_by_id.get(tgt_cat_id) == 'draw':
                                     limiter_draws += produced
@@ -351,9 +356,13 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                     # Propagate consumption to containers
                                     if s in contained_by_map:
                                         for container_id in contained_by_map[s]:
-                                            n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
-                                            if n_ch > 0:
-                                                source_events[container_id] = max(0, source_events.get(container_id, 0) - per_source_actual / n_ch)
+                                            mode = (containment_modes or {}).get((container_id, s))
+                                            if mode == 'ao_mesmo_tempo':
+                                                source_events[container_id] = max(0, source_events.get(container_id, 0) - per_source_actual)
+                                            else:
+                                                n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                                if n_ch > 0:
+                                                    source_events[container_id] = max(0, source_events.get(container_id, 0) - per_source_actual / n_ch)
                                 produced = consumed_total * count
                                 if cat_type_by_id.get(tgt_cat_id) == 'draw':
                                     limiter_draws += produced

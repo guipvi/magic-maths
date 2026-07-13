@@ -425,6 +425,7 @@ def build_containment_graph():
         contained_by_map: {cat_id: set of all cat_ids that contain it}
         direct_contains: {cat_id: set of directly contained cat_ids (user-defined only)}
         direct_children_of: {cat_id: set of direct children (parent-child + user-defined)}
+        containment_modes: {(container_id, contained_id): mode} for user-defined edges
     """
     all_cats = Category.query.all()
     cat_ids = [c.id for c in all_cats]
@@ -438,8 +439,10 @@ def build_containment_graph():
     # Build adjacency from user-defined containment
     containment_rows = CategoryContainment.query.all()
     user_edges = defaultdict(set)
+    containment_modes = {}
     for row in containment_rows:
         user_edges[row.container_category_id].add(row.contained_category_id)
+        containment_modes[(row.container_category_id, row.contained_category_id)] = row.mode or 'subcategoria'
 
     # Merge into single adjacency list
     forward = defaultdict(set)
@@ -472,7 +475,7 @@ def build_containment_graph():
     for row in containment_rows:
         direct_contains[row.container_category_id].add(row.contained_category_id)
 
-    return contains_map, dict(contained_by_map), direct_contains, dict(forward)
+    return contains_map, dict(contained_by_map), direct_contains, dict(forward), containment_modes
 
 
 def get_containment_edges():
@@ -486,11 +489,12 @@ def get_containment_edges():
             'container_category_name': r.container.name if r.container else None,
             'contained_category_id': r.contained_category_id,
             'contained_category_name': r.contained.name if r.contained else None,
+            'mode': r.mode or 'subcategoria',
         })
     return result
 
 
-def add_containment(container_id, contained_id):
+def add_containment(container_id, contained_id, mode='subcategoria'):
     """Add a containment relationship. Raises ValueError on cycle or self-containment."""
     if container_id == contained_id:
         raise ValueError('Cannot contain itself')
@@ -500,16 +504,19 @@ def add_containment(container_id, contained_id):
                            contained_category_id=contained_id)
                 .first())
     if existing:
+        existing.mode = mode
+        db.session.commit()
         return existing
 
     # Check for cycles: if contained already contains container (transitively)
-    contains_map, _, _, _ = build_containment_graph()
+    contains_map, _, _, _, _ = build_containment_graph()
     if container_id in contains_map.get(contained_id, set()):
         raise ValueError('Adding this containment would create a cycle')
 
     edge = CategoryContainment(
         container_category_id=container_id,
         contained_category_id=contained_id,
+        mode=mode,
     )
     db.session.add(edge)
     db.session.commit()
