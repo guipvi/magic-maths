@@ -92,18 +92,10 @@ export const categories = {
     card_id: number; category_id: number; multiplier?: number;
     mana_amount?: number | null; same_turn?: boolean | null;
     is_permanent?: boolean | null; max_per_turn?: number | null;
-    tutored_card_id?: number | null;
+    tutored_card_id?: number | null; wait_for_category_ids?: number[];
   }) => api.post(`/categories/deck/${deckId}/assignments`, data),
   removeAssignment: (deckId: string, assignmentId: number) =>
     api.delete(`/categories/deck/${deckId}/assignments/${assignmentId}`),
-  getTriggers: (deckId: string) =>
-    api.get(`/categories/deck/${deckId}/triggers`),
-  setTrigger: (deckId: string, data: {
-    source_category_id: number; target_category_id: number;
-    trigger_count?: number; accumulate?: boolean;
-  }) => api.post(`/categories/deck/${deckId}/triggers`, data),
-  removeTrigger: (deckId: string, triggerId: number) =>
-    api.delete(`/categories/deck/${deckId}/triggers/${triggerId}`),
   getCardTriggers: (deckId: string) =>
     api.get(`/categories/deck/${deckId}/card-triggers`),
   setCardTrigger: (deckId: string, data: {
@@ -112,6 +104,18 @@ export const categories = {
   }) => api.post(`/categories/deck/${deckId}/card-triggers`, data),
   removeCardTrigger: (deckId: string, triggerId: number) =>
     api.delete(`/categories/deck/${deckId}/card-triggers/${triggerId}`),
+  getLimiters: (deckId: string) =>
+    api.get(`/categories/deck/${deckId}/limiters`),
+  setLimiter: (deckId: string, data: {
+    target_category_id: number; logic: 'AND' | 'OR';
+    source_category_ids: number[]; trigger_count?: number; accumulate?: boolean;
+  }) => api.post(`/categories/deck/${deckId}/limiters`, data),
+  removeLimiter: (deckId: string, limiterId: number) =>
+    api.delete(`/categories/deck/${deckId}/limiters/${limiterId}`),
+  getWaitFor: (deckId: string, assignmentId: number) =>
+    api.get(`/categories/deck/${deckId}/assignments/${assignmentId}/wait-for`),
+  setWaitFor: (deckId: string, assignmentId: number, categoryIds: number[]) =>
+    api.post(`/categories/deck/${deckId}/assignments/${assignmentId}/wait-for`, { category_ids: categoryIds }),
 };
 
 export const commander = {

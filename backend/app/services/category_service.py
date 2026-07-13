@@ -1,5 +1,7 @@
 from app.extensions import db
-from app.models.category import Category, DeckCardCategory, DeckCategoryTrigger, DeckCardTrigger
+from app.models.category import (Category, DeckCardCategory,
+                                  DeckCardTrigger, DeckCategoryEventLimiter,
+                                  DeckCategoryEventLimiterSource, DeckAssignmentWaitFor)
 
 
 DEFAULT_CATEGORIES = [
@@ -122,6 +124,62 @@ def seed_default_categories():
             db.session.add(cat)
     db.session.commit()
 
+    _migrate_triggers_to_limiters()
+
+
+def _migrate_triggers_to_limiters():
+    """Migrate DeckCategoryTrigger entries to DeckCategoryEventLimiter (OR, 1 source).
+
+    Called on startup. Uses raw SQL to read from the old table and insert into
+    the new tables, since the ORM model no longer exists.
+    """
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(db.engine)
+    if 'deck_category_triggers' not in inspector.get_table_names():
+        return
+
+    rows = db.session.execute(
+        text('SELECT deck_id, source_category_id, target_category_id, '
+             'trigger_count, accumulate FROM deck_category_triggers')
+    ).fetchall()
+
+    if not rows:
+        db.session.execute(text('DROP TABLE deck_category_triggers'))
+        db.session.commit()
+        return
+
+    for deck_id, src_id, tgt_id, count, accumulate in rows:
+        existing = db.session.execute(
+            text('SELECT id FROM deck_category_event_limiters '
+                 'WHERE deck_id = :did AND target_category_id = :tgt'),
+            {'did': deck_id, 'tgt': tgt_id}
+        ).fetchone()
+
+        if existing:
+            lim_id = existing[0]
+            db.session.execute(
+                text('UPDATE deck_category_event_limiters SET logic = :logic, '
+                     'trigger_count = :tc, accumulate = :acc WHERE id = :id'),
+                {'logic': 'OR', 'tc': count, 'acc': accumulate, 'id': lim_id}
+            )
+        else:
+            db.session.execute(
+                text('INSERT INTO deck_category_event_limiters '
+                     '(deck_id, target_category_id, logic, trigger_count, accumulate) '
+                     'VALUES (:did, :tgt, :logic, :tc, :acc)'),
+                {'did': deck_id, 'tgt': tgt_id, 'logic': 'OR', 'tc': count, 'acc': accumulate}
+            )
+            lim_id = db.session.execute(text('SELECT last_insert_rowid()')).scalar()
+
+        db.session.execute(
+            text('INSERT OR IGNORE INTO deck_category_event_limiter_sources '
+                 '(limiter_id, source_category_id) VALUES (:lid, :sid)'),
+            {'lid': lim_id, 'sid': src_id}
+        )
+
+    db.session.execute(text('DROP TABLE deck_category_triggers'))
+    db.session.commit()
+
 
 def get_all_categories():
     return Category.query.order_by(Category.name).all()
@@ -186,7 +244,8 @@ def get_deck_assignments(deck_id):
 
 def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
                         mana_amount=None, same_turn=None, is_permanent=None,
-                        max_per_turn=None, tutored_card_id=None):
+                        max_per_turn=None, tutored_card_id=None,
+                        wait_for_category_ids=None):
     existing = (DeckCardCategory.query
                 .filter_by(deck_id=deck_id, card_id=card_id,
                            category_id=category_id)
@@ -198,6 +257,7 @@ def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
         existing.is_permanent = is_permanent
         existing.max_per_turn = max_per_turn
         existing.tutored_card_id = tutored_card_id
+        assn = existing
     else:
         assn = DeckCardCategory(
             deck_id=deck_id, card_id=card_id, category_id=category_id,
@@ -206,8 +266,16 @@ def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
             max_per_turn=max_per_turn, tutored_card_id=tutored_card_id,
         )
         db.session.add(assn)
+    db.session.flush()
+
+    if wait_for_category_ids is not None:
+        DeckAssignmentWaitFor.query.filter_by(assignment_id=assn.id).delete()
+        for cat_id in wait_for_category_ids:
+            db.session.add(DeckAssignmentWaitFor(
+                assignment_id=assn.id, category_id=cat_id))
+
     db.session.commit()
-    return existing or assn
+    return assn
 
 
 def remove_card_assignment(assignment_id):
@@ -229,44 +297,6 @@ def update_card_assignment(assignment_id, **kwargs):
             setattr(assn, key, value)
     db.session.commit()
     return assn
-
-
-def get_deck_triggers(deck_id):
-    return (DeckCategoryTrigger.query
-            .filter_by(deck_id=deck_id)
-            .all())
-
-
-def set_trigger(deck_id, source_category_id, target_category_id,
-                trigger_count=1, accumulate=False):
-    existing = (DeckCategoryTrigger.query
-                .filter_by(deck_id=deck_id,
-                           source_category_id=source_category_id,
-                           target_category_id=target_category_id)
-                .first())
-    if existing:
-        existing.trigger_count = trigger_count
-        existing.accumulate = accumulate
-    else:
-        trig = DeckCategoryTrigger(
-            deck_id=deck_id,
-            source_category_id=source_category_id,
-            target_category_id=target_category_id,
-            trigger_count=trigger_count,
-            accumulate=accumulate,
-        )
-        db.session.add(trig)
-    db.session.commit()
-    return existing or trig
-
-
-def remove_trigger(trigger_id):
-    trig = DeckCategoryTrigger.query.get(trigger_id)
-    if not trig:
-        return False
-    db.session.delete(trig)
-    db.session.commit()
-    return True
 
 
 # --- DeckCardTrigger CRUD ---
@@ -307,3 +337,73 @@ def remove_card_trigger(trigger_id):
     db.session.delete(trig)
     db.session.commit()
     return True
+
+
+# --- DeckCategoryEventLimiter CRUD ---
+
+def get_deck_limiters(deck_id):
+    return (DeckCategoryEventLimiter.query
+            .filter_by(deck_id=deck_id)
+            .all())
+
+
+def set_limiter(deck_id, target_category_id, source_category_ids,
+                logic='OR', trigger_count=1, accumulate=False):
+    existing = (DeckCategoryEventLimiter.query
+                .filter_by(deck_id=deck_id,
+                           target_category_id=target_category_id)
+                .first())
+    if existing:
+        existing.logic = logic
+        existing.trigger_count = trigger_count
+        existing.accumulate = accumulate
+        DeckCategoryEventLimiterSource.query.filter_by(
+            limiter_id=existing.id).delete()
+        limiter = existing
+    else:
+        limiter = DeckCategoryEventLimiter(
+            deck_id=deck_id,
+            target_category_id=target_category_id,
+            logic=logic,
+            trigger_count=trigger_count,
+            accumulate=accumulate,
+        )
+        db.session.add(limiter)
+    db.session.flush()
+
+    for src_cat_id in source_category_ids:
+        db.session.add(DeckCategoryEventLimiterSource(
+            limiter_id=limiter.id,
+            source_category_id=src_cat_id,
+        ))
+
+    db.session.commit()
+    return limiter
+
+
+def remove_limiter(limiter_id):
+    limiter = DeckCategoryEventLimiter.query.get(limiter_id)
+    if not limiter:
+        return False
+    db.session.delete(limiter)
+    db.session.commit()
+    return True
+
+
+# --- DeckAssignmentWaitFor CRUD ---
+
+def get_assignment_wait_fors(assignment_id):
+    return (DeckAssignmentWaitFor.query
+            .filter_by(assignment_id=assignment_id)
+            .all())
+
+
+def set_assignment_wait_fors(assignment_id, category_ids):
+    DeckAssignmentWaitFor.query.filter_by(
+        assignment_id=assignment_id).delete()
+    for cat_id in category_ids:
+        db.session.add(DeckAssignmentWaitFor(
+            assignment_id=assignment_id,
+            category_id=cat_id,
+        ))
+    db.session.commit()

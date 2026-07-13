@@ -56,23 +56,13 @@ def _build_category_map(assignments, categories):
     return cat_map
 
 
-def _build_trigger_maps(triggers, card_triggers):
-    """Build lookup maps for category and card triggers.
+def _build_card_trigger_map(card_triggers):
+    """Build lookup map for card triggers.
 
     Returns:
-        cat_trigger_map: {source_cat_id: [(target_cat_id, trigger_count)]}
         card_trigger_map: {card_id: [(target_cat_id, trigger_count, per_turn)]}
     """
-    cat_trigger_map = defaultdict(list)
     card_trigger_map = defaultdict(list)
-
-    if triggers:
-        for t in triggers:
-            src = t.get('source_category_id')
-            tgt = t.get('target_category_id')
-            count = t.get('trigger_count', 1)
-            if src and tgt:
-                cat_trigger_map[src].append((tgt, count))
 
     if card_triggers:
         for ct in card_triggers:
@@ -83,12 +73,41 @@ def _build_trigger_maps(triggers, card_triggers):
             if card_id and tgt:
                 card_trigger_map[card_id].append((tgt, count, per_turn))
 
-    return dict(cat_trigger_map), dict(card_trigger_map)
+    return dict(card_trigger_map)
+
+
+def _build_wait_for_map(assignments, categories):
+    """Build card_id -> set of wait_for_category_ids from assignments."""
+    wait_for_map = {}
+    if not assignments:
+        return wait_for_map
+    for a in assignments:
+        card_id = a.get('card_id')
+        wf = a.get('wait_for_category_ids')
+        if card_id and wf:
+            wait_for_map[card_id] = set(wf)
+    return wait_for_map
+
+
+def _check_wait_for(card_id, battlefield, wait_for_map, card_to_categories):
+    """Check if wait_for prerequisite is satisfied for a card.
+
+    Returns True if the card has no wait_for or if any wait_for category
+    has at least one card on the battlefield (OR logic).
+    """
+    wf_cats = wait_for_map.get(card_id)
+    if not wf_cats:
+        return True
+    for bf_card_id in battlefield:
+        bf_cats = card_to_categories.get(bf_card_id, set())
+        if bf_cats & wf_cats:
+            return True
+    return False
 
 
 def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                        assignments=None, categories=None,
-                       triggers=None, card_triggers=None):
+                       card_triggers=None, limiters=None):
     if deck_size is None:
         deck_size = sum(c.get('quantity', 1) for c in deck_cards)
 
@@ -102,7 +121,8 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
     nonland = [c for c in classified if not _is_land(c)]
 
     cat_map = _build_category_map(assignments, categories)
-    cat_trigger_map, card_trigger_map = _build_trigger_maps(triggers, card_triggers)
+    card_trigger_map = _build_card_trigger_map(card_triggers)
+    wait_for_map = _build_wait_for_map(assignments, categories)
 
     card_to_categories = defaultdict(set)
     if assignments:
@@ -121,6 +141,20 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
             mpt = a.get('max_per_turn')
             if mpt is not None and mpt > 0:
                 cat_max_per_turn[cat_id] += mpt
+
+    # Build limiter lookup: {target_cat_id: [(source_cat_ids, logic, trigger_count, accumulate)]}
+    limiter_map = defaultdict(list)
+    if limiters:
+        for lim in limiters:
+            tgt = lim.get('target_category_id')
+            src_ids = lim.get('source_category_ids', [])
+            if tgt and src_ids:
+                limiter_map[tgt].append({
+                    'source_ids': src_ids,
+                    'logic': lim.get('logic', 'OR'),
+                    'trigger_count': lim.get('trigger_count', 1),
+                    'accumulate': lim.get('accumulate', False),
+                })
 
     rng = np.random.default_rng(42)
     results = defaultdict(list)
@@ -156,6 +190,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
         extra_mana = 0
         cards_in_hand_by_turn = []
         max_mana_by_turn = []
+        battlefield = set()
 
         for turn in range(1, 16):
             cast_this_turn_ids = set()
@@ -225,26 +260,15 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                     spent = True
 
             # Phase 4: process triggers (e.g. sacrifice -> draw)
-            if cast_this_turn_ids and (cat_trigger_map or card_trigger_map):
+            # Add cast cards to battlefield first
+            battlefield.update(cast_this_turn_ids)
+
+            if cast_this_turn_ids and (card_trigger_map or limiter_map):
                 trigger_draws = 0
 
-                source_events = defaultdict(float)
                 for card_id in cast_this_turn_ids:
-                    for cat_id in card_to_categories.get(card_id, set()):
-                        if cat_id in cat_trigger_map:
-                            source_events[cat_id] += 1
-
-                for src_cat_id in source_events:
-                    cap = cat_max_per_turn.get(src_cat_id, 0)
-                    if cap > 0:
-                        source_events[src_cat_id] = min(source_events[src_cat_id], cap)
-
-                for src_cat_id, events in source_events.items():
-                    for tgt_cat_id, count in cat_trigger_map.get(src_cat_id, []):
-                        if cat_type_by_id.get(tgt_cat_id) == 'draw':
-                            trigger_draws += events * count
-
-                for card_id in cast_this_turn_ids:
+                    if not _check_wait_for(card_id, battlefield, wait_for_map, card_to_categories):
+                        continue
                     for tgt_cat_id, count, per_turn in card_trigger_map.get(card_id, []):
                         actual_count = count
                         if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
@@ -253,6 +277,49 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                 actual_count = count
                         if cat_type_by_id.get(tgt_cat_id) == 'draw':
                             trigger_draws += actual_count
+
+                # Process event limiters (multi-source AND/OR)
+                if limiter_map:
+                    # Build source events from cast cards
+                    source_events = defaultdict(float)
+                    for card_id in cast_this_turn_ids:
+                        for cat_id in card_to_categories.get(card_id, set()):
+                            source_events[cat_id] += 1
+
+                    limiter_draws = 0.0
+                    for tgt_cat_id, limiter_list in limiter_map.items():
+                        for lim in limiter_list:
+                            src_ids = lim['source_ids']
+                            logic = lim['logic']
+                            count = lim['trigger_count']
+                            cap = cat_max_per_turn.get(tgt_cat_id, 0)
+
+                            if logic == 'OR':
+                                total_available = sum(source_events.get(s, 0) for s in src_ids)
+                                if total_available <= 0:
+                                    continue
+                                needed = float('inf')
+                                if cap > 0:
+                                    needed = max(0, cap) / count if count > 0 else 0
+                                consumed = min(total_available, needed) if needed != float('inf') else total_available
+                                produced = consumed * count
+                                if cat_type_by_id.get(tgt_cat_id) == 'draw':
+                                    limiter_draws += produced
+
+                            elif logic == 'AND':
+                                avail = [source_events.get(s, 0) for s in src_ids]
+                                if any(a <= 0 for a in avail):
+                                    continue
+                                per_source = min(avail)
+                                needed = float('inf')
+                                if cap > 0:
+                                    needed = max(0, cap) / count if count > 0 else 0
+                                consumed_total = min(per_source * len(src_ids), needed) if needed != float('inf') else per_source * len(src_ids)
+                                produced = consumed_total * count
+                                if cat_type_by_id.get(tgt_cat_id) == 'draw':
+                                    limiter_draws += produced
+
+                    trigger_draws += limiter_draws
 
                 for _ in range(int(trigger_draws)):
                     if library:

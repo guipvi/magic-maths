@@ -74,37 +74,6 @@ class DeckCardCategory(db.Model):
         }
 
 
-class DeckCategoryTrigger(db.Model):
-    __tablename__ = 'deck_category_triggers'
-
-    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
-    deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False)
-    source_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
-    target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
-    trigger_count = db.Column(db.Integer, default=1)
-    accumulate = db.Column(db.Boolean, default=False)
-
-    source_category = db.relationship('Category', foreign_keys=[source_category_id])
-    target_category = db.relationship('Category', foreign_keys=[target_category_id])
-
-    __table_args__ = (
-        db.UniqueConstraint('deck_id', 'source_category_id', 'target_category_id',
-                            name='uq_deck_trigger'),
-    )
-
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'deck_id': self.deck_id,
-            'source_category_id': self.source_category_id,
-            'source_category_name': self.source_category.name if self.source_category else None,
-            'target_category_id': self.target_category_id,
-            'target_category_name': self.target_category.name if self.target_category else None,
-            'trigger_count': self.trigger_count,
-            'accumulate': self.accumulate,
-        }
-
-
 class DeckCardTrigger(db.Model):
     __tablename__ = 'deck_card_triggers'
 
@@ -141,3 +110,80 @@ class DeckCardTrigger(db.Model):
             'trigger_count': self.trigger_count,
             'per_turn': self.per_turn,
         }
+
+
+class DeckCategoryEventLimiter(db.Model):
+    __tablename__ = 'deck_category_event_limiters'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False)
+    target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    logic = db.Column(db.String(3), default='OR')
+    trigger_count = db.Column(db.Integer, default=1)
+    accumulate = db.Column(db.Boolean, default=False)
+
+    target_category = db.relationship('Category', foreign_keys=[target_category_id])
+    sources = db.relationship('DeckCategoryEventLimiterSource',
+                              backref='limiter', cascade='all, delete-orphan')
+
+    __table_args__ = (
+        db.UniqueConstraint('deck_id', 'target_category_id',
+                            name='uq_deck_limiter'),
+    )
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'deck_id': self.deck_id,
+            'target_category_id': self.target_category_id,
+            'target_category_name': self.target_category.name if self.target_category else None,
+            'logic': self.logic,
+            'trigger_count': self.trigger_count,
+            'accumulate': self.accumulate,
+            'source_category_ids': [s.source_category_id for s in self.sources],
+            'source_category_names': [
+                s.source_category.name if s.source_category else None
+                for s in self.sources
+            ],
+        }
+
+
+class DeckCategoryEventLimiterSource(db.Model):
+    __tablename__ = 'deck_category_event_limiter_sources'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    limiter_id = db.Column(db.Integer,
+                           db.ForeignKey('deck_category_event_limiters.id',
+                                         ondelete='CASCADE'),
+                           nullable=False)
+    source_category_id = db.Column(db.Integer,
+                                   db.ForeignKey('categories.id'),
+                                   nullable=False)
+
+    source_category = db.relationship('Category',
+                                      foreign_keys=[source_category_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('limiter_id', 'source_category_id',
+                            name='uq_limiter_source'),
+    )
+
+
+class DeckAssignmentWaitFor(db.Model):
+    __tablename__ = 'deck_assignment_wait_fors'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    assignment_id = db.Column(db.Integer,
+                              db.ForeignKey('deck_card_categories.id',
+                                            ondelete='CASCADE'),
+                              nullable=False)
+    category_id = db.Column(db.Integer,
+                            db.ForeignKey('categories.id'),
+                            nullable=False)
+
+    category = db.relationship('Category', foreign_keys=[category_id])
+
+    __table_args__ = (
+        db.UniqueConstraint('assignment_id', 'category_id',
+                            name='uq_assignment_wait_for'),
+    )

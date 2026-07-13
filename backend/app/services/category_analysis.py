@@ -3,9 +3,10 @@ Category Analysis Engine (resource-pool model)
 
 Replaces the linear-system approach with a resource-pool model where:
   - Assignments produce events in their category
-  - Category triggers CONSUME from source and PRODUCE to target (resource links)
+  - Event limiters CONSUME from multiple source categories (AND/OR logic)
+    and PRODUCE to a target category
   - Card triggers produce events in target category (with per-turn overrides)
-  - accumulate on trigger: unconsumed source carries over between turns
+  - accumulate on limiter: unconsumed source carries over between turns
   - max_per_turn on assignment: caps events contributed by that card per turn
 """
 
@@ -47,18 +48,18 @@ def _bivariate_hypergeom_pmf(N, K1, K2, n, k1, k2):
         return 0.0
 
 
-def analyze_categories(deck_size, categories, assignments, triggers, max_turns=10,
-                       card_triggers=None):
+def analyze_categories(deck_size, categories, assignments, max_turns=10,
+                       card_triggers=None, limiters=None):
     """
     categories: list of dicts [{'id', 'name', 'color', 'config'}]
     assignments: list of dicts [{'card_id', 'category_id', 'multiplier',
                                  'mana_amount', 'same_turn', 'is_permanent',
-                                 'max_per_turn'}]
+                                 'max_per_turn', 'wait_for_category_ids'}]
                  cards in the deck are already expanded by quantity
-    triggers: list of dicts [{'source_category_id', 'target_category_id',
-                              'trigger_count', 'accumulate'}]
     card_triggers: list of dicts [{'source_category_id', 'target_category_id',
                                    'trigger_count', 'quantity', 'per_turn'}]
+    limiters: list of dicts [{'target_category_id', 'logic', 'source_category_ids',
+                              'trigger_count', 'accumulate'}]
     deck_size: total number of cards in deck
 
     Returns: dict with per-turn analysis
@@ -85,6 +86,9 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
     # Track per-assignment max_per_turn
     assignment_caps = []  # list of (category_id, max_per_turn) per assignment copy
 
+    # Track wait_for info per assignment: index -> list of wait_for_category_ids
+    wait_for_by_idx = {}  # cat_idx -> list of (wait_for_cat_indices)
+
     for assn in assignments:
         cid = assn['category_id']
         if cid in cat_index:
@@ -107,16 +111,12 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
                         max_per_turn_by_cat[pidx] += mpt
                 pid = cat_parent.get(pid)
 
-    # Build resource links: each category trigger is a flow from src to tgt
-    # Processed in order, each unit of src consumed produces `count` units of tgt
-    links = []  # (src_idx, tgt_idx, count, accumulate)
-    for trig in triggers:
-        src = trig['source_category_id']
-        tgt = trig['target_category_id']
-        count = trig.get('trigger_count', 1)
-        accumulate = trig.get('accumulate', False)
-        if src in cat_index and tgt in cat_index:
-            links.append((cat_index[src], cat_index[tgt], count, accumulate))
+            # Store wait_for info
+            wf_cats = assn.get('wait_for_category_ids')
+            if wf_cats:
+                wf_indices = [cat_index[wc] for wc in wf_cats if wc in cat_index]
+                if wf_indices:
+                    wait_for_by_idx.setdefault(idx, []).append(wf_indices)
 
     # Identify draw category indices for iterative draw feedback
     draw_indices = set()
@@ -153,6 +153,21 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
                     else:
                         pool[i] = raw
 
+            # 2a. Wait-for probability gate: multiply pool by P(wait_for satisfied)
+            nd_int = int(n_drawn)
+            for i in range(n_cats):
+                if i not in wait_for_by_idx or pool[i] <= 0:
+                    continue
+                for wf_indices in wait_for_by_idx[i]:
+                    # OR logic: P(at least 1) = 1 - product(P(0 from each))
+                    p_none_product = 1.0
+                    for wf_idx in wf_indices:
+                        K_wf = direct_count[wf_idx]
+                        p_zero = _hypergeom_cdf(deck_size, K_wf, nd_int, 0)
+                        p_none_product *= p_zero
+                    p_gate = 1.0 - p_none_product
+                    pool[i] *= p_gate
+
             # 2b. Card-trigger base events (per-card triggers with per_turn support)
             card_trigger_base = np.zeros(n_cats)
             if card_triggers:
@@ -176,32 +191,48 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
             # 3. Add surplus from previous turn (for accumulate categories)
             pool += surplus
 
-            # 4. Pre-fuel: categories with max_per_turn need to consume fuel
-            for tgt_idx in range(n_cats):
-                if pool[tgt_idx] <= 0 or max_per_turn_by_cat[tgt_idx] <= 0:
-                    continue
-                events_to_fuel = pool[tgt_idx]
-                for src_idx, tgt_idx2, count, accumulate in links:
-                    if tgt_idx2 != tgt_idx or count <= 0:
+            # 4. Process event limiters (multi-source AND/OR)
+            if limiters:
+                for lim in limiters:
+                    tgt = lim.get('target_category_id')
+                    if tgt not in cat_index:
                         continue
-                    fuel_needed = events_to_fuel / count
-                    fuel_used = min(pool[src_idx], fuel_needed)
-                    events_fired = fuel_used * count
-                    pool[src_idx] -= fuel_used
-                    pool[tgt_idx] = events_fired
-                    break
+                    tgt_idx = cat_index[tgt]
+                    sources = lim.get('source_category_ids', [])
+                    src_indices = [cat_index[s] for s in sources if s in cat_index]
+                    if not src_indices:
+                        continue
+                    count = lim.get('trigger_count', 1)
+                    logic = lim.get('logic', 'OR')
 
-            # 5. Process resource links
-            for src_idx, tgt_idx, count, accumulate in links:
-                if pool[src_idx] <= 0:
-                    continue
-                target_headroom = float('inf')
-                if max_per_turn_by_cat[tgt_idx] > 0:
-                    target_headroom = max(0, max_per_turn_by_cat[tgt_idx] - pool[tgt_idx])
-                max_source = target_headroom / count if count > 0 else 0
-                consumed = min(pool[src_idx], max_source)
-                pool[src_idx] -= consumed
-                pool[tgt_idx] += consumed * count
+                    # Compute headroom for target
+                    target_headroom = float('inf')
+                    if max_per_turn_by_cat[tgt_idx] > 0:
+                        target_headroom = max(0, max_per_turn_by_cat[tgt_idx] - pool[tgt_idx])
+                    if target_headroom <= 0:
+                        continue
+                    needed_events = target_headroom / count if count > 0 else 0
+
+                    if logic == 'OR':
+                        total_available = sum(pool[s] for s in src_indices if pool[s] > 0)
+                        if total_available <= 0:
+                            continue
+                        consumed_total = min(total_available, needed_events)
+                        ratio = consumed_total / total_available
+                        for s in src_indices:
+                            if pool[s] > 0:
+                                pool[s] *= (1.0 - ratio)
+                        pool[tgt_idx] += consumed_total * count
+                    elif logic == 'AND':
+                        avail = [pool[s] for s in src_indices if pool[s] > 0]
+                        if len(avail) < len(src_indices):
+                            continue
+                        per_source = min(avail)
+                        consumed_total = min(per_source * len(src_indices), needed_events)
+                        per_source_actual = consumed_total / len(src_indices)
+                        for s in src_indices:
+                            pool[s] -= per_source_actual
+                        pool[tgt_idx] += consumed_total * count
 
             # Check convergence: extra draws from draw categories
             extra_draws = sum(pool[i] for i in draw_indices) if draw_indices else 0.0
@@ -212,11 +243,17 @@ def analyze_categories(deck_size, categories, assignments, triggers, max_turns=1
                 break
             n_drawn = new_n_drawn
 
-        # 6. Compute surplus for next turn (only for accumulate categories)
+        # 5. Compute surplus for next turn (only for accumulate limiters)
         surplus.fill(0.0)
-        for src_idx, tgt_idx, count, accumulate in links:
-            if accumulate and pool[src_idx] > 0:
-                surplus[src_idx] = pool[src_idx]
+        if limiters:
+            for lim in limiters:
+                if not lim.get('accumulate', False):
+                    continue
+                for src_id in lim.get('source_category_ids', []):
+                    if src_id in cat_index:
+                        s_idx = cat_index[src_id]
+                        if pool[s_idx] > 0:
+                            surplus[s_idx] = pool[s_idx]
 
         # 7. Probability distribution for each category
         category_probs = {}

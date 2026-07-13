@@ -3,7 +3,7 @@ from app.services.category_analysis import analyze_categories
 
 
 def test_empty_deck():
-    result = analyze_categories(deck_size=0, categories=[], assignments=[], triggers=[])
+    result = analyze_categories(deck_size=0, categories=[], assignments=[])
     assert result['deck_size'] == 0
     # still produces 10 turns of empty data
     for t in range(1, 11):
@@ -18,7 +18,7 @@ def test_basic_category_counts():
         {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
          'mana_amount': None, 'same_turn': None, 'is_permanent': None},
     ]
-    result = analyze_categories(deck_size=40, categories=categories, assignments=assignments, triggers=[])
+    result = analyze_categories(deck_size=40, categories=categories, assignments=assignments)
 
     assert result['categories'][0]['cards_assigned'] == 2
     assert result['categories'][0]['total_multiplier_sum'] == 2.0
@@ -36,7 +36,7 @@ def test_multiplier_effect():
         {'card_id': 1, 'category_id': 1, 'multiplier': 3.0,
          'mana_amount': None, 'same_turn': None, 'is_permanent': None},
     ]
-    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments, triggers=[])
+    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments)
 
     assert result['categories'][0]['total_multiplier_sum'] == 3.0
     t1 = result['by_turn'][1]['categories'][1]
@@ -44,7 +44,7 @@ def test_multiplier_effect():
     assert abs(t1['expected'] - 0.35) < 0.01
 
 
-def test_triggers_increase_target():
+def test_limiters_increase_target():
     categories = [
         {'id': 1, 'name': 'criatura', 'color': '#ef4444', 'config': {}},
         {'id': 2, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
@@ -55,18 +55,19 @@ def test_triggers_increase_target():
         {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
          'mana_amount': None, 'same_turn': None, 'is_permanent': None},
     ]
-    triggers = [
-        {'source_category_id': 1, 'target_category_id': 2, 'trigger_count': 1},
+    limiters = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
     ]
-    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments, triggers=triggers)
+    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments,
+                                limiters=limiters)
 
     t1 = result['by_turn'][1]
     criatura = t1['categories'][1]
     draw = t1['categories'][2]
 
-    # Each creature event is consumed into draw via resource link
+    # Each creature event is consumed into draw via limiter OR
     # total_expected_draw = expected_direct_draw + expected_creature_events
-    # using abs=0.02 to account for rounding to 2 decimals
     assert draw['total_expected'] == pytest.approx(draw['expected'] + criatura['expected'], abs=0.02)
 
 
@@ -83,7 +84,7 @@ def test_joint_probability():
         {'card_id': 3, 'category_id': 2, 'multiplier': 1.0,
          'mana_amount': None, 'same_turn': None, 'is_permanent': None},
     ]
-    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments, triggers=[])
+    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments)
 
     t1 = result['by_turn'][1]
     joint_key = '1_2'
@@ -105,10 +106,12 @@ def test_max_events():
         {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
          'mana_amount': None, 'same_turn': None, 'is_permanent': None},
     ]
-    triggers = [
-        {'source_category_id': 1, 'target_category_id': 2, 'trigger_count': 1},
+    limiters = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
     ]
-    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments, triggers=triggers)
+    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments,
+                                limiters=limiters)
 
     t1 = result['by_turn'][1]
     # Pool for draw = direct_draw + all_ramp (consumed via link)
@@ -123,7 +126,7 @@ def test_prob_at_least_thresholds():
          'mana_amount': None, 'same_turn': None, 'is_permanent': None}
         for i in range(10)
     ]
-    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments, triggers=[])
+    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments)
 
     t7 = result['by_turn'][7]
     cat_data = t7['categories'][1]
@@ -147,7 +150,7 @@ def test_multiple_categories_no_triggers():
         {'card_id': 3, 'category_id': 3, 'multiplier': 1.5,
          'mana_amount': None, 'same_turn': None, 'is_permanent': None},
     ]
-    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments, triggers=[])
+    result = analyze_categories(deck_size=60, categories=categories, assignments=assignments)
 
     assert len(result['categories']) == 3
     t1 = result['by_turn'][1]
