@@ -118,7 +118,7 @@ export const categories = {
     api.post(`/categories/deck/${deckId}/assignments/${assignmentId}/wait-for`, { category_ids: categoryIds }),
   getContainment: () =>
     api.get('/categories/containment'),
-  setContainment: (data: { container_category_id: number; contained_category_id: number }) =>
+  setContainment: (data: { container_category_id: number; contained_category_id: number; mode?: string }) =>
     api.post('/categories/containment', data),
   removeContainment: (containmentId: number) =>
     api.delete(`/categories/containment/${containmentId}`),

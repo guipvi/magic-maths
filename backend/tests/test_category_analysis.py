@@ -512,3 +512,138 @@ def test_consumption_propagates_to_multiple_containers():
     # Both containers should have smaller pools when propagation is active
     assert jund_with < jund_no
     assert aristocrats_with < aristocrats_no
+
+
+def test_ao_mesmo_tempo_rollup_full_weight():
+    """ao_mesmo_tempo: card IS both things, rollup uses 1:1 (no dilution)."""
+    categories = [
+        {'id': 1, 'name': 'criatura', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'artefato', 'color': '#3b82f6', 'config': {}},
+        {'id': 3, 'name': 'permanente', 'color': '#a855f7', 'config': {}},
+    ]
+    # 6 criatura-artefato cards
+    assignments = [{'card_id': i, 'category_id': 1, 'multiplier': 1.0,
+                    'mana_amount': None, 'same_turn': None, 'is_permanent': None}
+                   for i in range(1, 7)]
+    assignments += [{'card_id': i, 'category_id': 2, 'multiplier': 1.0,
+                     'mana_amount': None, 'same_turn': None, 'is_permanent': None}
+                    for i in range(1, 7)]
+
+    containment_map = {3: {1, 2}}
+    direct_children_of = {3: {1, 2}}
+    # ao_mesmo_tempo: criatura and artefato are both "permanente" simultaneously
+    containment_modes = {(3, 1): 'ao_mesmo_tempo', (3, 2): 'ao_mesmo_tempo'}
+
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        containment_map=containment_map, direct_children_of=direct_children_of,
+        containment_modes=containment_modes)
+
+    t1 = result['by_turn'][1]
+    permanente = t1['categories'][3]
+    criatura = t1['categories'][1]
+
+    # criatura has 6 cards, drawing 7 from 60: expected = 7 * 6/60 = 0.7
+    assert abs(criatura['expected'] - 0.7) < 0.01
+
+    # ao_mesmo_tempo: permanente gets full weight from both children
+    # effective_weight[3] = 6 (from criatura) + 6 (from artefato) = 12
+    # expected = 7 * 12/60 = 1.4
+    assert abs(permanente['expected'] - 1.4) < 0.01
+
+
+def test_ao_mesmo_tempo_vs_subcategoria():
+    """Compare ao_mesmo_tempo (1:1) vs subcategoria (1/n) for same structure."""
+    categories = [
+        {'id': 1, 'name': 'criatura', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'artefato', 'color': '#3b82f6', 'config': {}},
+        {'id': 3, 'name': 'permanente', 'color': '#a855f7', 'config': {}},
+    ]
+    assignments = [{'card_id': i, 'category_id': 1, 'multiplier': 1.0,
+                    'mana_amount': None, 'same_turn': None, 'is_permanent': None}
+                   for i in range(1, 7)]
+
+    containment_map = {3: {1, 2}}
+    direct_children_of = {3: {1, 2}}
+
+    # subcategoria: diluted (1/2)
+    result_sub = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        containment_map=containment_map, direct_children_of=direct_children_of,
+        containment_modes={(3, 1): 'subcategoria'})
+
+    # ao_mesmo_tempo: full weight (1/1)
+    result_full = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        containment_map=containment_map, direct_children_of=direct_children_of,
+        containment_modes={(3, 1): 'ao_mesmo_tempo'})
+
+    t1_sub = result_sub['by_turn'][1]
+    t1_full = result_full['by_turn'][1]
+
+    # ao_mesmo_tempo should give permanente a higher pool than subcategoria
+    assert t1_full['categories'][3]['pool'] > t1_sub['categories'][3]['pool']
+
+
+def test_ao_mesmo_tempo_consumption_propagation():
+    """Consumption propagation: ao_mesmo_tempo propagates 1:1, not 1/n.
+
+    The key difference: with ao_mesmo_tempo, when a child is consumed,
+    the container loses MORE pool (full consumed amount vs consumed/n_ch).
+    We verify this by checking the DELTA in container pool.
+    """
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'token', 'color': '#3b82f6', 'config': {}},
+        {'id': 3, 'name': 'jund', 'color': '#f59e0b', 'config': {}},
+    ]
+    # 10 sacrifice sources (only these roll up to jund)
+    assignments = [{'card_id': i, 'category_id': 1, 'multiplier': 1.0,
+                    'mana_amount': None, 'same_turn': None, 'is_permanent': None}
+                   for i in range(1, 11)]
+    # 10 tokens (also roll up to jund)
+    assignments += [{'card_id': i, 'category_id': 2, 'multiplier': 1.0,
+                     'mana_amount': None, 'same_turn': None, 'is_permanent': None}
+                    for i in range(11, 21)]
+
+    containment_map = {3: {1, 2}}
+    direct_children_of = {3: {1, 2}}
+
+    # Limiter consumes from sacrifice → token
+    limiters = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+
+    # Run WITH limiter (consumption propagates)
+    result_ao = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiters, containment_map=containment_map,
+        direct_children_of=direct_children_of,
+        containment_modes={(3, 1): 'ao_mesmo_tempo', (3, 2): 'ao_mesmo_tempo'})
+    # Run WITHOUT limiter (no consumption, pure rollup)
+    result_ao_base = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        containment_map=containment_map,
+        direct_children_of=direct_children_of,
+        containment_modes={(3, 1): 'ao_mesmo_tempo', (3, 2): 'ao_mesmo_tempo'})
+
+    result_sub = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiters, containment_map=containment_map,
+        direct_children_of=direct_children_of,
+        containment_modes={(3, 1): 'subcategoria', (3, 2): 'subcategoria'})
+    result_sub_base = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        containment_map=containment_map,
+        direct_children_of=direct_children_of,
+        containment_modes={(3, 1): 'subcategoria', (3, 2): 'subcategoria'})
+
+    # Compute pool loss (delta) for jund container
+    delta_ao = result_ao_base['by_turn'][1]['categories'][3]['pool'] - \
+               result_ao['by_turn'][1]['categories'][3]['pool']
+    delta_sub = result_sub_base['by_turn'][1]['categories'][3]['pool'] - \
+                result_sub['by_turn'][1]['categories'][3]['pool']
+
+    # ao_mesmo_tempo should propagate MORE consumption (larger delta)
+    assert delta_ao > delta_sub

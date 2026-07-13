@@ -99,6 +99,13 @@ def create_app(config_class=Config):
             ))
             db.session.commit()
 
+        cat_contain_cols = [c['name'] for c in insp.get_columns('category_containments')]
+        if 'mode' not in cat_contain_cols:
+            db.session.execute(db.text(
+                "ALTER TABLE category_containments ADD COLUMN mode VARCHAR(20) DEFAULT 'subcategoria'"
+            ))
+            db.session.commit()
+
         from app.services.category_service import seed_default_categories
         seed_default_categories()
 

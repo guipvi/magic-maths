@@ -773,20 +773,35 @@ function ContainmentManager({ categories, edges, onRefresh }: {
   categories: any[]; edges: any[]; onRefresh: () => void
 }) {
   const [containerId, setContainerId] = useState<number | ''>('')
-  const [containedId, setContainedId] = useState<number | ''>('')
+  const [containedIds, setContainedIds] = useState<number[]>([])
+  const [mode, setMode] = useState<string>('subcategoria')
   const [error, setError] = useState('')
 
+  const addContained = (catId: number) => {
+    if (catId && !containedIds.includes(catId)) {
+      setContainedIds([...containedIds, catId])
+    }
+  }
+
+  const removeContained = (catId: number) => {
+    setContainedIds(containedIds.filter(id => id !== catId))
+  }
+
   const handleAdd = async () => {
-    if (containerId === '' || containedId === '') return
+    if (containerId === '' || containedIds.length === 0) return
     setError('')
     try {
-      await api.setContainment({
-        container_category_id: Number(containerId),
-        contained_category_id: Number(containedId),
-      })
+      for (const cid of containedIds) {
+        await api.setContainment({
+          container_category_id: Number(containerId),
+          contained_category_id: cid,
+          mode,
+        })
+      }
       onRefresh()
       setContainerId('')
-      setContainedId('')
+      setContainedIds([])
+      setMode('subcategoria')
     } catch (e: any) {
       setError(e.response?.data?.error || 'Erro ao adicionar contenção')
     }
@@ -806,7 +821,7 @@ function ContainmentManager({ categories, edges, onRefresh }: {
       </p>
 
       <div className="flex gap-3 mb-4 flex-wrap items-end">
-        <div className="flex-1 min-w-[150px]">
+        <div className="flex-1 min-w-[180px]">
           <label className="text-xs text-magic-muted">Contém (container)</label>
           <select value={containerId} onChange={e => setContainerId(Number(e.target.value))}
             className="input w-full mt-1">
@@ -816,15 +831,38 @@ function ContainmentManager({ categories, edges, onRefresh }: {
             ))}
           </select>
         </div>
-        <div className="flex items-center text-magic-muted text-lg self-center pt-4">contém</div>
-        <div className="flex-1 min-w-[150px]">
-          <label className="text-xs text-magic-muted">Categoria contida</label>
-          <select value={containedId} onChange={e => setContainedId(Number(e.target.value))}
-            className="input w-full mt-1">
-            <option value="">Selecionar...</option>
-            {categories.map(cat => (
-              <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
-            ))}
+        <div className="flex-1 min-w-[200px]">
+          <label className="text-xs text-magic-muted">Categorias contidas</label>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {containedIds.map(catId => {
+              const cat = categories.find(c => c.id === catId)
+              return (
+                <span key={catId}
+                  className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700 rounded text-xs">
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cat?.color }} />
+                  {catLabel(cat || {parent_id: null, name: String(catId)}, categories)}
+                  <button onClick={() => removeContained(catId)}
+                    className="text-magic-muted hover:text-white ml-1">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )
+            })}
+            <select value="" onChange={e => { addContained(Number(e.target.value)); e.target.value = '' }}
+              className="input text-xs py-1 min-w-[120px]">
+              <option value="">+ Adicionar...</option>
+              {categories.filter(c => !containedIds.includes(c.id)).map(cat => (
+                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="min-w-[140px]">
+          <label className="text-xs text-magic-muted">Modo</label>
+          <select value={mode} onChange={e => setMode(e.target.value)}
+            className="input w-full mt-1 text-xs">
+            <option value="subcategoria">Subcategoria (1/n)</option>
+            <option value="ao_mesmo_tempo">Ao mesmo tempo (1:1)</option>
           </select>
         </div>
         <button onClick={handleAdd} className="btn btn-primary flex items-center gap-1 pt-4">
@@ -841,6 +879,13 @@ function ContainmentManager({ categories, edges, onRefresh }: {
               <span className="font-medium text-indigo-300">{edge.container_category_name}</span>
               <span className="text-magic-muted">contém</span>
               <span className="font-medium text-green-300">{edge.contained_category_name}</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                edge.mode === 'ao_mesmo_tempo'
+                  ? 'bg-amber-900 text-amber-200'
+                  : 'bg-slate-600 text-slate-300'
+              }`}>
+                {edge.mode === 'ao_mesmo_tempo' ? '1:1' : '1/n'}
+              </span>
             </div>
             <button onClick={() => handleRemove(edge.id)}
               className="text-red-400 hover:text-red-300">
