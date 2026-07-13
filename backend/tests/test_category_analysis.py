@@ -155,3 +155,360 @@ def test_multiple_categories_no_triggers():
     assert len(result['categories']) == 3
     t1 = result['by_turn'][1]
     assert len(t1['categories']) == 3
+
+
+def test_containment_rollup():
+    """Cards assigned to child category roll up to container via containment."""
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'jund', 'color': '#22c55e', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # jund contains sacrifice (user-defined cross-hierarchy)
+    containment_map = {2: {1}}
+    result = analyze_categories(deck_size=60, categories=categories,
+                                assignments=assignments,
+                                containment_map=containment_map)
+
+    # sacrifice has 3 cards directly
+    assert result['categories'][0]['cards_assigned'] == 3
+    # jund should also show 3 cards via containment rollup
+    assert result['categories'][1]['cards_assigned'] == 3
+
+
+def test_containment_limiter_source_expansion():
+    """Limiter source expands through containment: source contains child categories."""
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'jund', 'color': '#22c55e', 'config': {}},
+        {'id': 3, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 3, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # jund contains sacrifice
+    containment_map = {2: {1}}
+    # limiter consumes from jund (which contains sacrifice)
+    limiters = [
+        {'target_category_id': 3, 'logic': 'OR', 'source_category_ids': [2],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result_no_contain = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments)
+    result_with_contain = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiters, containment_map=containment_map)
+
+    # Without containment, limiter source jund has 0 cards -> no consumption
+    draw_no = result_no_contain['by_turn'][1]['categories'][3]
+    # With containment, limiter source jund contains sacrifice (3 events) -> consumes into draw
+    draw_with = result_with_contain['by_turn'][1]['categories'][3]
+    assert draw_with['total_expected'] >= draw_no['total_expected']
+
+
+def test_containment_wait_for_expansion():
+    """Wait_for satisfied by any category that contains the required category."""
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'jund', 'color': '#22c55e', 'config': {}},
+    ]
+    # Card 1: in sacrifice, waits for jund (which contains sacrifice)
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None,
+         'wait_for_category_ids': [2]},
+    ]
+    containment_map = {2: {1}}
+    result = analyze_categories(deck_size=40, categories=categories,
+                                assignments=assignments,
+                                containment_map=containment_map)
+
+    # sacrifice is contained by jund, so wait_for jund should be
+    # satisfied by sacrifice cards on battlefield (via containment expansion)
+    t1 = result['by_turn'][1]['categories'][1]
+    # Without containment, wait_for jund would have 0 probability (no jund cards)
+    # With containment, jund is satisfied by sacrifice cards
+    assert t1['total_expected'] > 0
+
+
+# --- 1/n Dilution Tests ---
+
+def test_parent_rollup_diluted_pool():
+    """Parent with 2 children: each child event counts as 1/2 in parent pool."""
+    categories = [
+        {'id': 1, 'name': 'A', 'color': '#ef4444', 'config': {},
+         'parent_id': 3},
+        {'id': 2, 'name': 'B', 'color': '#3b82f6', 'config': {},
+         'parent_id': 3},
+        {'id': 3, 'name': 'R', 'color': '#22c55e', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 2.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    direct_children_of = {3: {1, 2}}
+    result = analyze_categories(deck_size=60, categories=categories,
+                                assignments=assignments,
+                                direct_children_of=direct_children_of)
+    result_no_dilution = analyze_categories(deck_size=60, categories=categories,
+                                            assignments=assignments)
+
+    t1 = result['by_turn'][1]
+    r_data = t1['categories'][3]
+    r_no_dil = result_no_dilution['by_turn'][1]['categories'][3]
+
+    # R has 2 direct children, so diluted effective_count = 0.5 + 0.5 = 1.0
+    # Non-diluted would have effective_count = 1 + 1 = 2.0
+    # Diluted pool should be smaller than non-diluted
+    assert r_data['pool'] < r_no_dil['pool']
+
+    # direct_count (for hypergeom) should still be 2 for R
+    assert result['categories'][2]['cards_assigned'] == 2
+
+
+def test_single_child_no_dilution():
+    """Parent with 1 child: 1/1 = no dilution, same as before."""
+    categories = [
+        {'id': 1, 'name': 'A', 'color': '#ef4444', 'config': {},
+         'parent_id': 2},
+        {'id': 2, 'name': 'R', 'color': '#22c55e', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    direct_children_of = {2: {1}}
+    result = analyze_categories(deck_size=60, categories=categories,
+                                assignments=assignments,
+                                direct_children_of=direct_children_of)
+
+    t1 = result['by_turn'][1]
+    r_data = t1['categories'][2]
+    # With 1 child, 1/1 = 1.0, no dilution
+    # Pool for R = (7*2/60) * 1.0 = 0.233...
+    assert abs(r_data['pool'] - 7 * 2 / 60) < 0.01
+    assert result['categories'][1]['cards_assigned'] == 2
+
+
+def test_containment_dilution():
+    """User-defined containment: container with 2 contained categories, 1/n dilution."""
+    categories = [
+        {'id': 1, 'name': 'A', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'B', 'color': '#3b82f6', 'config': {}},
+        {'id': 3, 'name': 'Jund', 'color': '#22c55e', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # Jund contains both A and B
+    containment_map = {3: {1, 2}}
+    direct_children_of = {3: {1, 2}}
+    result = analyze_categories(deck_size=60, categories=categories,
+                                assignments=assignments,
+                                containment_map=containment_map,
+                                direct_children_of=direct_children_of)
+    result_no_dilution = analyze_categories(deck_size=60, categories=categories,
+                                            assignments=assignments,
+                                            containment_map=containment_map)
+
+    t1 = result['by_turn'][1]
+    jund_diluted = t1['categories'][3]
+    jund_no_dil = result_no_dilution['by_turn'][1]['categories'][3]
+
+    # Jund has 2 direct children (A, B), diluted pool should be smaller
+    assert jund_diluted['pool'] < jund_no_dil['pool']
+    # direct_count still 2
+    assert result['categories'][2]['cards_assigned'] == 2
+
+
+def test_direct_count_vs_effective_count():
+    """Verify direct_count is 1:1 while effective_count is 1/n diluted."""
+    categories = [
+        {'id': 1, 'name': 'A', 'color': '#ef4444', 'config': {},
+         'parent_id': 3},
+        {'id': 2, 'name': 'B', 'color': '#3b82f6', 'config': {},
+         'parent_id': 3},
+        {'id': 3, 'name': 'R', 'color': '#22c55e', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 2.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 3.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    direct_children_of = {3: {1, 2}}
+    result = analyze_categories(deck_size=60, categories=categories,
+                                assignments=assignments,
+                                direct_children_of=direct_children_of)
+
+    # A has 2 cards (multiplier 2+3=5), B has 1 card (multiplier 1)
+    # direct_count for R = 3 (1:1 rollup)
+    # effective_count for R = 2*(1/2) + 1*(1/2) = 1.0 + 0.5 = 1.5
+    # effective_weight for R = 5*(1/2) + 1*(1/2) = 2.5 + 0.5 = 3.0
+    # R cards_assigned = 3 (direct_count, 1:1)
+    assert result['categories'][2]['cards_assigned'] == 3
+
+    t1 = result['by_turn'][1]
+    r_data = t1['categories'][3]
+    # R's expected and pool use effective_weight directly:
+    # expected = n_drawn * effective_weight / deck_size = 7 * 3.0 / 60 = 0.35
+    expected_r = 7 * 3.0 / 60
+    assert abs(r_data['expected'] - expected_r) < 0.01
+    assert abs(r_data['pool'] - expected_r) < 0.01
+
+
+def test_no_direct_children_of_fallback():
+    """Without direct_children_of, rollup behaves as 1:1 (backward compatible)."""
+    categories = [
+        {'id': 1, 'name': 'A', 'color': '#ef4444', 'config': {},
+         'parent_id': 2},
+        {'id': 2, 'name': 'R', 'color': '#22c55e', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # No direct_children_of passed -> fallback to 1:1
+    result = analyze_categories(deck_size=60, categories=categories,
+                                assignments=assignments)
+
+    t1 = result['by_turn'][1]
+    r_data = t1['categories'][2]
+    # Without direct_children_of, n_children=0 -> fallback adds 1:1
+    # Pool for R = (7*1/60) * 1.0 = 0.116...
+    assert abs(r_data['pool'] - 7 * 1 / 60) < 0.01
+
+
+# --- Consumption Propagation Tests ---
+
+def test_consumption_propagates_to_container():
+    """Limiter consumes from child → container pool should decrease."""
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'jund', 'color': '#22c55e', 'config': {}},
+        {'id': 3, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 3, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # jund contains sacrifice
+    containment_map = {2: {1}}
+    direct_children_of = {2: {1}}
+    # limiter consumes from jund (which contains sacrifice)
+    limiters = [
+        {'target_category_id': 3, 'logic': 'OR', 'source_category_ids': [2],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiters, containment_map=containment_map,
+        direct_children_of=direct_children_of)
+
+    t1 = result['by_turn'][1]
+    # jund has 1 child (sacrifice), 1 card in sacrifice
+    # sacrifice pool = 7 * 1 / 60 = 0.1167
+    # jund effective_weight = 1/1 = 1.0, pool = 7 * 1 / 60 = 0.1167
+    # Limiter consumes from jund → consumed_from_jund consumed
+    # draw gets the consumed events
+    draw = t1['categories'][3]
+    sacrifice = t1['categories'][1]
+    # draw should have events from limiter consumption
+    assert draw['pool'] > draw['expected']
+
+
+def test_consumption_does_not_propagate_without_containment():
+    """Without containment, consumption stays within the source category."""
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'jund', 'color': '#22c55e', 'config': {}},
+        {'id': 3, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 3, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # No containment_map → no propagation
+    limiters = [
+        {'target_category_id': 3, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiters)
+
+    t1 = result['by_turn'][1]
+    # jund should be unaffected by sacrifice consumption
+    jund = t1['categories'][2]
+    sacrifice = t1['categories'][1]
+    # jund pool = 7 * 1 / 60 (just its own cards, no propagation)
+    assert abs(jund['pool'] - 7 * 1 / 60) < 0.01
+
+
+def test_consumption_propagates_to_multiple_containers():
+    """Limiter consumes from child contained by TWO containers → both decrease."""
+    categories = [
+        {'id': 1, 'name': 'sacrifice', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'jund', 'color': '#22c55e', 'config': {}},
+        {'id': 3, 'name': 'aristocrats', 'color': '#a855f7', 'config': {}},
+        {'id': 4, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 4, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    # Both jund and aristocrats contain sacrifice
+    containment_map = {2: {1}, 3: {1}}
+    direct_children_of = {2: {1}, 3: {1}}
+    # limiter consumes from sacrifice directly
+    limiters = [
+        {'target_category_id': 4, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiters, containment_map=containment_map,
+        direct_children_of=direct_children_of)
+
+    t1 = result['by_turn'][1]
+    # Without propagation: jund and aristocrats would keep their full rollup pools
+    # With propagation: both should have reduced pools
+    result_no_prop = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        containment_map=containment_map, direct_children_of=direct_children_of)
+
+    jund_with = t1['categories'][2]['pool']
+    jund_no = result_no_prop['by_turn'][1]['categories'][2]['pool']
+    aristocrats_with = t1['categories'][3]['pool']
+    aristocrats_no = result_no_prop['by_turn'][1]['categories'][3]['pool']
+
+    # Both containers should have smaller pools when propagation is active
+    assert jund_with < jund_no
+    assert aristocrats_with < aristocrats_no

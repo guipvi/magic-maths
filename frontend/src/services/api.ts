@@ -116,6 +116,12 @@ export const categories = {
     api.get(`/categories/deck/${deckId}/assignments/${assignmentId}/wait-for`),
   setWaitFor: (deckId: string, assignmentId: number, categoryIds: number[]) =>
     api.post(`/categories/deck/${deckId}/assignments/${assignmentId}/wait-for`, { category_ids: categoryIds }),
+  getContainment: () =>
+    api.get('/categories/containment'),
+  setContainment: (data: { container_category_id: number; contained_category_id: number }) =>
+    api.post('/categories/containment', data),
+  removeContainment: (containmentId: number) =>
+    api.delete(`/categories/containment/${containmentId}`),
 };
 
 export const commander = {

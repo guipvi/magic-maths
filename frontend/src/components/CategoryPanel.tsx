@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { categories as api } from '../services/api'
-import { Plus, Trash2, Tag, Zap, Link2, Pencil, Check, X } from 'lucide-react'
+import { Plus, Trash2, Tag, Zap, Link2, ArrowDown, Pencil, Check, X } from 'lucide-react'
 
 function catLabel(c: any, allCats: any[]): string {
   if (c.parent_id) {
@@ -21,8 +21,9 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
   const [assignments, setAssignments] = useState<any[]>([])
   const [cardTriggers, setCardTriggers] = useState<any[]>([])
   const [limiters, setLimiters] = useState<any[]>([])
+  const [containmentEdges, setContainmentEdges] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'categories' | 'assign' | 'triggers'>('categories')
+  const [activeTab, setActiveTab] = useState<'categories' | 'assign' | 'triggers' | 'containment'>('categories')
 
   useEffect(() => {
     if (!deckId) return
@@ -32,11 +33,13 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
       api.getAssignments(deckId),
       api.getCardTriggers(deckId),
       api.getLimiters(deckId),
-    ]).then(([catRes, assnRes, ctRes, limRes]) => {
+      api.getContainment(),
+    ]).then(([catRes, assnRes, ctRes, limRes, contRes]) => {
       setAllCategories(catRes.data)
       setAssignments(assnRes.data)
       setCardTriggers(ctRes.data)
       setLimiters(limRes.data)
+      setContainmentEdges(contRes.data)
     }).finally(() => setLoading(false))
   }, [deckId])
 
@@ -58,12 +61,17 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
     })
   }
 
+  const refreshContainment = () => {
+    api.getContainment().then(r => setContainmentEdges(r.data))
+  }
+
   if (loading) return <div className="text-magic-muted text-sm py-4">Carregando categorias...</div>
 
   const tabs = [
     { id: 'categories' as const, label: 'Categorias', icon: Tag },
     { id: 'assign' as const, label: 'Atribuir Cartas', icon: Zap },
     { id: 'triggers' as const, label: 'Triggers', icon: Link2 },
+    { id: 'containment' as const, label: 'Contenção', icon: ArrowDown },
   ]
 
   return (
@@ -103,6 +111,13 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
           limiters={limiters}
           deckId={deckId}
           onRefresh={refreshTriggers}
+        />
+      )}
+      {activeTab === 'containment' && (
+        <ContainmentManager
+          categories={allCategories}
+          edges={containmentEdges}
+          onRefresh={refreshContainment}
         />
       )}
     </div>
@@ -749,6 +764,93 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
             <p className="text-sm text-magic-muted text-center py-4">Nenhum limitador de eventos.</p>
           )}
         </div>
+      </div>
+    </div>
+  )
+}
+
+function ContainmentManager({ categories, edges, onRefresh }: {
+  categories: any[]; edges: any[]; onRefresh: () => void
+}) {
+  const [containerId, setContainerId] = useState<number | ''>('')
+  const [containedId, setContainedId] = useState<number | ''>('')
+  const [error, setError] = useState('')
+
+  const handleAdd = async () => {
+    if (containerId === '' || containedId === '') return
+    setError('')
+    try {
+      await api.setContainment({
+        container_category_id: Number(containerId),
+        contained_category_id: Number(containedId),
+      })
+      onRefresh()
+      setContainerId('')
+      setContainedId('')
+    } catch (e: any) {
+      setError(e.response?.data?.error || 'Erro ao adicionar contenção')
+    }
+  }
+
+  const handleRemove = async (id: number) => {
+    await api.removeContainment(id)
+    onRefresh()
+  }
+
+  return (
+    <div className="card">
+      <h3 className="font-semibold mb-2">Contenção entre Categorias</h3>
+      <p className="text-xs text-magic-muted mb-4">
+        Define quais categorias contêm outras. Categorias pai automaticamente contêm suas subcategorias.
+        A contenção propaga para: rollup, wait_for, limitadores, max_per_turn e acumulação.
+      </p>
+
+      <div className="flex gap-3 mb-4 flex-wrap items-end">
+        <div className="flex-1 min-w-[150px]">
+          <label className="text-xs text-magic-muted">Contém (container)</label>
+          <select value={containerId} onChange={e => setContainerId(Number(e.target.value))}
+            className="input w-full mt-1">
+            <option value="">Selecionar...</option>
+            {categories.map(cat => (
+              <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center text-magic-muted text-lg self-center pt-4">contém</div>
+        <div className="flex-1 min-w-[150px]">
+          <label className="text-xs text-magic-muted">Categoria contida</label>
+          <select value={containedId} onChange={e => setContainedId(Number(e.target.value))}
+            className="input w-full mt-1">
+            <option value="">Selecionar...</option>
+            {categories.map(cat => (
+              <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+            ))}
+          </select>
+        </div>
+        <button onClick={handleAdd} className="btn btn-primary flex items-center gap-1 pt-4">
+          <Plus className="w-4 h-4" /> Adicionar
+        </button>
+      </div>
+
+      {error && <p className="text-red-400 text-sm mb-2">{error}</p>}
+
+      <div className="space-y-2">
+        {edges.map(edge => (
+          <div key={edge.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="font-medium text-indigo-300">{edge.container_category_name}</span>
+              <span className="text-magic-muted">contém</span>
+              <span className="font-medium text-green-300">{edge.contained_category_name}</span>
+            </div>
+            <button onClick={() => handleRemove(edge.id)}
+              className="text-red-400 hover:text-red-300">
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        ))}
+        {edges.length === 0 && (
+          <p className="text-sm text-magic-muted text-center py-4">Nenhuma relação de contenção definida.</p>
+        )}
       </div>
     </div>
   )

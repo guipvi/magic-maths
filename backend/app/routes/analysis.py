@@ -84,7 +84,8 @@ def _load_assignments(deck_id, cards):
 
 
 def _load_category_data(deck_id, cards):
-    """Load categories, card_triggers, and limiters for a deck."""
+    """Load categories, card_triggers, limiters, and containment for a deck."""
+    from app.services.category_service import build_containment_graph
     all_cats = get_all_categories()
     cat_list = [c.to_dict() for c in all_cats]
 
@@ -113,7 +114,9 @@ def _load_category_data(deck_id, cards):
 
     limiters = [l.to_dict() for l in limiter_raw]
 
-    return cat_list, card_triggers, limiters
+    containment_map, _, _, direct_children_of = build_containment_graph()
+
+    return cat_list, card_triggers, limiters, containment_map, direct_children_of
 
 
 @analysis_bp.route('/mana-ramp', methods=['POST'])
@@ -132,7 +135,7 @@ def mana_ramp():
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
         assignments = _load_assignments(data['deck_id'], cards)
-        categories, card_triggers, limiters = _load_category_data(data['deck_id'], cards)
+        categories, card_triggers, limiters, containment_map, direct_children_of = _load_category_data(data['deck_id'], cards)
     elif data.get('cards'):
         cards = _cards_from_payload(data)
     else:
@@ -158,12 +161,14 @@ def goldfish():
     assignments = None
     categories = None
     card_triggers = None
+    limiters = None
+    containment_map = None
     if data.get('deck_id'):
         _, cards = _get_deck_cards(data['deck_id'], user_id)
         if cards is None:
             return jsonify({'error': 'Deck not found'}), 404
         assignments = _load_assignments(data['deck_id'], cards)
-        categories, card_triggers, limiters = _load_category_data(data['deck_id'], cards)
+        categories, card_triggers, limiters, containment_map, direct_children_of = _load_category_data(data['deck_id'], cards)
     elif data.get('cards'):
         cards = _cards_from_payload(data)
     else:
@@ -175,7 +180,9 @@ def goldfish():
     sim_count = data.get('simulations', 2000)
     result = simulate_goldfish(cards, deck_size=len(cards), simulations=sim_count,
                                 assignments=assignments, categories=categories,
-                                card_triggers=card_triggers)
+                                card_triggers=card_triggers, limiters=limiters,
+                                containment_map=containment_map,
+                                direct_children_of=direct_children_of)
     return jsonify(result)
 
 
@@ -268,8 +275,10 @@ def full_analysis():
     cat_list = None
     card_triggers = None
     limiters = None
+    containment_map = None
+    direct_children_of = None
     if deck_id:
-        cat_list, card_triggers, limiters = _load_category_data(deck_id, cards)
+        cat_list, card_triggers, limiters, containment_map, direct_children_of = _load_category_data(deck_id, cards)
 
     app = current_app._get_current_object()
 
@@ -279,7 +288,8 @@ def full_analysis():
             assignments, cat_list, card_triggers)
         gold_future = pool.submit(
             _run_with_app_context, app, simulate_goldfish, cards, len(cards), 1000,
-            assignments, cat_list, card_triggers)
+            assignments, cat_list, card_triggers, limiters, containment_map,
+            direct_children_of)
         land_future = pool.submit(
             _run_with_app_context, app, recommend_lands, cards, len(cards), assignments)
 
@@ -293,7 +303,8 @@ def full_analysis():
             cat_future = pool.submit(
                 _run_with_app_context, app, analyze_categories, len(cards), cat_list,
                 assignments, card_triggers=card_triggers,
-                limiters=limiters)
+                limiters=limiters, containment_map=containment_map,
+                direct_children_of=direct_children_of)
         else:
             cat_future = None
 
@@ -433,7 +444,15 @@ def categories_analysis():
 
     limiters = [l.to_dict() for l in limiter_raw]
 
+    containment_map = {}
+    direct_children_of = {}
+    if deck_id:
+        from app.services.category_service import build_containment_graph
+        containment_map, _, _, direct_children_of = build_containment_graph()
+
     max_turns = data.get('max_turns', 10)
     result = analyze_categories(deck_size, cat_list, assignments, max_turns,
-                                card_triggers=card_triggers, limiters=limiters)
+                                card_triggers=card_triggers, limiters=limiters,
+                                containment_map=containment_map,
+                                direct_children_of=direct_children_of)
     return jsonify(result)
