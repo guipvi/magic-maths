@@ -19,8 +19,8 @@ interface Props {
 export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props) {
   const [allCategories, setAllCategories] = useState<any[]>([])
   const [assignments, setAssignments] = useState<any[]>([])
-  const [triggers, setTriggers] = useState<any[]>([])
   const [cardTriggers, setCardTriggers] = useState<any[]>([])
+  const [limiters, setLimiters] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'categories' | 'assign' | 'triggers'>('categories')
 
@@ -30,13 +30,13 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
     Promise.all([
       api.list(),
       api.getAssignments(deckId),
-      api.getTriggers(deckId),
       api.getCardTriggers(deckId),
-    ]).then(([catRes, assnRes, trigRes, ctRes]) => {
+      api.getLimiters(deckId),
+    ]).then(([catRes, assnRes, ctRes, limRes]) => {
       setAllCategories(catRes.data)
       setAssignments(assnRes.data)
-      setTriggers(trigRes.data)
       setCardTriggers(ctRes.data)
+      setLimiters(limRes.data)
     }).finally(() => setLoading(false))
   }, [deckId])
 
@@ -49,11 +49,11 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
   }
   const refreshTriggers = () => {
     Promise.all([
-      api.getTriggers(deckId),
       api.getCardTriggers(deckId),
-    ]).then(([trigRes, ctRes]) => {
-      setTriggers(trigRes.data)
+      api.getLimiters(deckId),
+    ]).then(([ctRes, limRes]) => {
       setCardTriggers(ctRes.data)
+      setLimiters(limRes.data)
       onTriggersChange?.()
     })
   }
@@ -99,8 +99,8 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
         <TriggerManager
           categories={allCategories}
           assignments={assignments}
-          triggers={triggers}
           cardTriggers={cardTriggers}
+          limiters={limiters}
           deckId={deckId}
           onRefresh={refreshTriggers}
         />
@@ -267,6 +267,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
   const [sameTurn, setSameTurn] = useState(false)
   const [isPermanent, setIsPermanent] = useState(true)
   const [maxPerTurn, setMaxPerTurn] = useState<number | ''>('')
+  const [waitForCategories, setWaitForCategories] = useState<number[]>([])
 
   const cat = categories.find(c => c.id === selectedCategory)
   const isRamp = cat?.config?.type === 'ramp'
@@ -285,6 +286,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
       is_permanent: isRamp ? isPermanent : null,
       max_per_turn: maxPerTurn === '' ? null : Number(maxPerTurn),
       tutored_card_id: isTutor ? (tutoredCard === '' ? null : Number(tutoredCard)) : null,
+      wait_for_category_ids: waitForCategories.length > 0 ? waitForCategories : undefined,
     })
     onRefresh()
     setSelectedCard('')
@@ -295,6 +297,7 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
     setIsPermanent(true)
     setMaxPerTurn('')
     setTutoredCard('')
+    setWaitForCategories([])
   }
 
   const handleRemove = async (assnId: number) => {
@@ -372,6 +375,39 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
           {!isPermanent && <span className="text-xs text-amber-400">Ritual</span>}
         </div>
       )}
+
+      <div className="mb-4">
+        <label className="text-xs text-magic-muted">Esperar castar para</label>
+        <div className="flex flex-wrap gap-1 mt-1">
+          {waitForCategories.map(catId => {
+            const cat = categories.find(c => c.id === catId)
+            return (
+              <span key={catId}
+                className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700 rounded text-xs">
+                <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cat?.color }} />
+                {catLabel(cat || {parent_id: null, name: String(catId)}, categories)}
+                <button onClick={() => setWaitForCategories(waitForCategories.filter(id => id !== catId))}
+                  className="text-magic-muted hover:text-white ml-1">
+                  <X className="w-3 h-3" />
+                </button>
+              </span>
+            )
+          })}
+          <select value="" onChange={e => {
+            const val = Number(e.target.value)
+            if (val && !waitForCategories.includes(val)) {
+              setWaitForCategories([...waitForCategories, val])
+            }
+            e.target.value = ''
+          }} className="input text-xs py-1 min-w-[120px]">
+            <option value="">+ Adicionar...</option>
+            {categories.filter(c => !waitForCategories.includes(c.id)).map(cat => (
+              <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+            ))}
+          </select>
+        </div>
+        <p className="text-[10px] text-magic-muted mt-1">OR — a atribuição só produz eventos se qualquer uma destas categorias tiver carta em campo</p>
+      </div>
 
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -471,19 +507,20 @@ function PerTurnEditor({ value, onChange }: { value: (number | null)[] | null; o
   )
 }
 
-function TriggerManager({ categories, assignments, triggers, cardTriggers, deckId, onRefresh }: {
-  categories: any[]; assignments: any[]; triggers: any[]; cardTriggers: any[];
-  deckId: string; onRefresh: () => void
+function TriggerManager({ categories, assignments, cardTriggers, limiters, deckId, onRefresh }: {
+  categories: any[]; assignments: any[]; cardTriggers: any[];
+  limiters: any[]; deckId: string; onRefresh: () => void
 }) {
   const [sourceAssignment, setSourceAssignment] = useState<number | ''>('')
   const [targetCategory, setTargetCategory] = useState<number | ''>('')
   const [triggerCount, setTriggerCount] = useState(1)
   const [perTurn, setPerTurn] = useState<(number | null)[] | null>(null)
 
-  const [catSource, setCatSource] = useState<number | ''>('')
-  const [catTarget, setCatTarget] = useState<number | ''>('')
-  const [catCount, setCatCount] = useState(1)
-  const [catAccumulate, setCatAccumulate] = useState(false)
+  const [limTarget, setLimTarget] = useState<number | ''>('')
+  const [limLogic, setLimLogic] = useState<'OR' | 'AND'>('OR')
+  const [limSources, setLimSources] = useState<number[]>([])
+  const [limCount, setLimCount] = useState(1)
+  const [limAccumulate, setLimAccumulate] = useState(false)
 
   const handleCreateCardTrigger = async () => {
     if (sourceAssignment === '' || targetCategory === '') return
@@ -505,24 +542,35 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
     onRefresh()
   }
 
-  const handleCreateCatTrigger = async () => {
-    if (catSource === '' || catTarget === '') return
-    await api.setTrigger(deckId, {
-      source_category_id: Number(catSource),
-      target_category_id: Number(catTarget),
-      trigger_count: catCount,
-      accumulate: catAccumulate,
+  const handleCreateLimiter = async () => {
+    if (limTarget === '' || limSources.length === 0) return
+    await api.setLimiter(deckId, {
+      target_category_id: Number(limTarget),
+      logic: limLogic,
+      source_category_ids: limSources,
+      trigger_count: limCount,
+      accumulate: limAccumulate,
     })
     onRefresh()
-    setCatSource('')
-    setCatTarget('')
-    setCatCount(1)
-    setCatAccumulate(false)
+    setLimTarget('')
+    setLimSources([])
+    setLimCount(1)
+    setLimAccumulate(false)
   }
 
-  const handleRemoveCatTrigger = async (id: number) => {
-    await api.removeTrigger(deckId, id)
+  const handleRemoveLimiter = async (id: number) => {
+    await api.removeLimiter(deckId, id)
     onRefresh()
+  }
+
+  const addLimSource = (catId: number) => {
+    if (!limSources.includes(catId)) {
+      setLimSources([...limSources, catId])
+    }
+  }
+
+  const removeLimSource = (catId: number) => {
+    setLimSources(limSources.filter(id => id !== catId))
   }
 
   return (
@@ -596,16 +644,16 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
         </div>
       </div>
 
-      {/* Category-level triggers */}
+      {/* Event Limiters */}
       <div className="card">
-        <h3 className="font-semibold mb-4">Triggers entre Categorias</h3>
+        <h3 className="font-semibold mb-4">Limitadores de Eventos</h3>
         <p className="text-xs text-magic-muted mb-4">
-          Consome eventos da fonte e produz eventos no alvo. Cada unidade consumida gera N eventos no alvo.
+          Consome de múltiplas categorias fonte com lógica AND/OR para produzir eventos no alvo.
         </p>
         <div className="flex gap-3 mb-4 flex-wrap items-end">
           <div className="flex-1 min-w-[150px]">
-            <label className="text-xs text-magic-muted">Fonte (consome)</label>
-            <select value={catSource} onChange={e => setCatSource(Number(e.target.value))}
+            <label className="text-xs text-magic-muted">Alvo (produz)</label>
+            <select value={limTarget} onChange={e => setLimTarget(Number(e.target.value))}
               className="input w-full mt-1">
               <option value="">Selecionar...</option>
               {categories.map(cat => (
@@ -613,56 +661,92 @@ function TriggerManager({ categories, assignments, triggers, cardTriggers, deckI
               ))}
             </select>
           </div>
-          <div className="flex items-center text-magic-muted text-lg self-center pt-4">→</div>
-          <div className="flex-1 min-w-[150px]">
-            <label className="text-xs text-magic-muted">Alvo (produz)</label>
-            <select value={catTarget} onChange={e => setCatTarget(Number(e.target.value))}
-              className="input w-full mt-1">
-              <option value="">Selecionar...</option>
-              {categories.map(cat => (
-                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
-              ))}
-            </select>
+          <div className="flex items-center pt-4">
+            <button onClick={() => setLimLogic(limLogic === 'OR' ? 'AND' : 'OR')}
+              className={`px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
+                limLogic === 'OR'
+                  ? 'bg-indigo-600 border-indigo-500 text-white'
+                  : 'bg-emerald-600 border-emerald-500 text-white'
+              }`}>
+              {limLogic}
+            </button>
           </div>
           <div className="w-20">
             <label className="text-xs text-magic-muted">Por unidade</label>
-            <input type="number" value={catCount} min={1}
-              onChange={e => setCatCount(Number(e.target.value))}
+            <input type="number" value={limCount} min={1}
+              onChange={e => setLimCount(Number(e.target.value))}
               className="input w-full mt-1" />
           </div>
           <div className="flex items-center pt-4">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={catAccumulate}
-                onChange={e => setCatAccumulate(e.target.checked)} />
+              <input type="checkbox" checked={limAccumulate}
+                onChange={e => setLimAccumulate(e.target.checked)} />
               <span className="text-xs text-magic-muted">Acumular</span>
             </label>
           </div>
-          <button onClick={handleCreateCatTrigger} className="btn btn-primary flex items-center gap-1 pt-4">
+          <button onClick={handleCreateLimiter} className="btn btn-primary flex items-center gap-1 pt-4">
             <Plus className="w-4 h-4" /> Adicionar
           </button>
         </div>
 
+        {/* Source categories multi-select */}
+        <div className="mb-4">
+          <label className="text-xs text-magic-muted">Fontes (consome de)</label>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {limSources.map(catId => {
+              const cat = categories.find(c => c.id === catId)
+              return (
+                <span key={catId}
+                  className="inline-flex items-center gap-1 px-2 py-1 bg-slate-700 rounded text-xs">
+                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: cat?.color }} />
+                  {catLabel(cat || {parent_id: null, name: String(catId)}, categories)}
+                  <button onClick={() => removeLimSource(catId)}
+                    className="text-magic-muted hover:text-white ml-1">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              )
+            })}
+            <select value="" onChange={e => { addLimSource(Number(e.target.value)); e.target.value = '' }}
+              className="input text-xs py-1 min-w-[120px]">
+              <option value="">+ Adicionar...</option>
+              {categories.filter(c => !limSources.includes(c.id)).map(cat => (
+                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         <div className="space-y-2">
-          {triggers.map(t => {
-            const srcCat = categories.find(c => c.id === t.source_category_id)
-            const tgtCat = categories.find(c => c.id === t.target_category_id)
+          {limiters.map(lim => {
+            const tgtCat = categories.find(c => c.id === lim.target_category_id)
             return (
-              <div key={t.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="font-medium text-indigo-300">{catLabel(srcCat || {parent_id: null, name: String(t.source_category_id)}, categories)}</span>
-                  <span className="text-magic-muted">→ {t.trigger_count}x →</span>
-                  <span className="font-medium text-green-300">{catLabel(tgtCat || {parent_id: null, name: String(t.target_category_id)}, categories)}</span>
-                  {t.accumulate && <span className="text-[10px] text-amber-400">acumula</span>}
+              <div key={lim.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
+                <div className="flex items-center gap-3 text-sm flex-wrap">
+                  {(lim.source_category_names || []).map((name: string, i: number) => (
+                    <span key={i}>
+                      <span className="font-medium text-indigo-300">{name}</span>
+                      {i < lim.source_category_names.length - 1 && (
+                        <span className="text-magic-muted mx-1">{lim.logic}</span>
+                      )}
+                    </span>
+                  ))}
+                  <span className="text-magic-muted">→ {lim.trigger_count}x →</span>
+                  <span className="font-medium text-green-300">
+                    {catLabel(tgtCat || {parent_id: null, name: lim.target_category_name || String(lim.target_category_id)}, categories)}
+                  </span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-magic-muted">{lim.logic}</span>
+                  {lim.accumulate && <span className="text-[10px] text-amber-400">acumula</span>}
                 </div>
-                <button onClick={() => handleRemoveCatTrigger(t.id)}
+                <button onClick={() => handleRemoveLimiter(lim.id)}
                   className="text-red-400 hover:text-red-300">
                   <Trash2 className="w-4 h-4" />
                 </button>
               </div>
             )
           })}
-          {triggers.length === 0 && (
-            <p className="text-sm text-magic-muted text-center py-4">Nenhum trigger entre categorias.</p>
+          {limiters.length === 0 && (
+            <p className="text-sm text-magic-muted text-center py-4">Nenhum limitador de eventos.</p>
           )}
         </div>
       </div>

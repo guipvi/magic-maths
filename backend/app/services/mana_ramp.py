@@ -3,7 +3,7 @@ Mana Ramp Prediction Engine
 
 Predicts available mana per turn using the category-based resource pool model.
 Uses analyze_categories() which considers manually assigned categories
-(ramp, draw, alcance) and card/category triggers.
+(ramp, draw, alcance) and card triggers.
 For ramp categories: total_expected events mana_amount = mana contributed
 Land mana computed via hypergeometric distribution.
 
@@ -49,7 +49,7 @@ def _hypergeom_cdf(n_deck, n_success, n_draw, k):
 
 
 def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=None,
-                       categories=None, triggers=None, card_triggers=None,
+                       categories=None, card_triggers=None,
                        category_analysis_result=None):
     if deck_size is None:
         deck_size = len(deck_cards)
@@ -68,7 +68,7 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=
     if assignments and categories:
         return _analyze_mana_via_categories(
             deck_cards, deck_size, land_count, avg_cmc, simulations,
-            assignments, categories, triggers, card_triggers,
+            assignments, categories, card_triggers,
         )
 
     results = {}
@@ -109,14 +109,13 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=
 
 
 def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, simulations,
-                                  assignments, categories, triggers, card_triggers):
+                                  assignments, categories, card_triggers):
     from app.services.category_analysis import analyze_categories
 
     cat_result = analyze_categories(
         deck_size=deck_size,
         categories=categories,
         assignments=assignments,
-        triggers=triggers or [],
         card_triggers=card_triggers,
     )
 

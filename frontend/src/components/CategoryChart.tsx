@@ -91,7 +91,7 @@ export default function CategoryChart({ data }: Props) {
         </div>
 
         <div className="card">
-          <h3 className="font-semibold mb-4">Direto vs Total (com triggers)</h3>
+          <h3 className="font-semibold mb-4">Direto vs Total</h3>
           <ResponsiveContainer width="100%" height={250}>
             <LineChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
@@ -224,7 +224,7 @@ export default function CategoryChart({ data }: Props) {
       <div className="space-y-4">
         {header}
         <div className="card">
-          <h3 className="font-semibold mb-4">Máximo Teórico de Eventos (com triggers)</h3>
+          <h3 className="font-semibold mb-4">Máximo Teórico de Eventos</h3>
           <ResponsiveContainer width="100%" height={250}>
             <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="#334155" />

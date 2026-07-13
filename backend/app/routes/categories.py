@@ -7,8 +7,9 @@ from app.services.category_service import (
     seed_default_categories, get_all_categories, get_category,
     create_category, update_category, delete_category,
     get_deck_assignments, set_card_assignment, remove_card_assignment,
-    get_deck_triggers, set_trigger, remove_trigger,
     get_deck_card_triggers, set_card_trigger, remove_card_trigger,
+    get_deck_limiters, set_limiter, remove_limiter,
+    set_assignment_wait_fors,
 )
 
 categories_bp = Blueprint('categories', __name__)
@@ -114,6 +115,7 @@ def add_assignment(deck_id):
         is_permanent=data.get('is_permanent'),
         max_per_turn=data.get('max_per_turn'),
         tutored_card_id=data.get('tutored_card_id'),
+        wait_for_category_ids=data.get('wait_for_category_ids'),
     )
     return jsonify(assn.to_dict()), 201
 
@@ -128,51 +130,6 @@ def delete_assignment(deck_id, assignment_id):
     if remove_card_assignment(assignment_id):
         return jsonify({'ok': True})
     return jsonify({'error': 'Assignment not found'}), 404
-
-
-# --- Triggers per deck ---
-
-@categories_bp.route('/deck/<deck_id>/triggers', methods=['GET'])
-@jwt_required()
-def list_triggers(deck_id):
-    user_id = get_jwt_identity()
-    deck = _get_deck(deck_id, user_id)
-    if not deck:
-        return jsonify({'error': 'Deck not found'}), 404
-    triggers = get_deck_triggers(deck_id)
-    return jsonify([t.to_dict() for t in triggers])
-
-
-@categories_bp.route('/deck/<deck_id>/triggers', methods=['POST'])
-@jwt_required()
-def add_trigger(deck_id):
-    user_id = get_jwt_identity()
-    deck = _get_deck(deck_id, user_id)
-    if not deck:
-        return jsonify({'error': 'Deck not found'}), 404
-    data = request.get_json()
-    if not data or not data.get('source_category_id') or not data.get('target_category_id'):
-        return jsonify({'error': 'source_category_id and target_category_id required'}), 400
-    trig = set_trigger(
-        deck_id=deck_id,
-        source_category_id=data['source_category_id'],
-        target_category_id=data['target_category_id'],
-        trigger_count=data.get('trigger_count', 1),
-        accumulate=data.get('accumulate', False),
-    )
-    return jsonify(trig.to_dict()), 201
-
-
-@categories_bp.route('/deck/<deck_id>/triggers/<int:trigger_id>', methods=['DELETE'])
-@jwt_required()
-def delete_trigger(deck_id, trigger_id):
-    user_id = get_jwt_identity()
-    deck = _get_deck(deck_id, user_id)
-    if not deck:
-        return jsonify({'error': 'Deck not found'}), 404
-    if remove_trigger(trigger_id):
-        return jsonify({'ok': True})
-    return jsonify({'error': 'Trigger not found'}), 404
 
 
 # --- Card-Trigger per deck ---
@@ -218,3 +175,81 @@ def delete_card_trigger(deck_id, trigger_id):
     if remove_card_trigger(trigger_id):
         return jsonify({'ok': True})
     return jsonify({'error': 'Card trigger not found'}), 404
+
+
+# --- Event Limiters per deck ---
+
+@categories_bp.route('/deck/<deck_id>/limiters', methods=['GET'])
+@jwt_required()
+def list_limiters(deck_id):
+    user_id = get_jwt_identity()
+    deck = _get_deck(deck_id, user_id)
+    if not deck:
+        return jsonify({'error': 'Deck not found'}), 404
+    limiters = get_deck_limiters(deck_id)
+    return jsonify([l.to_dict() for l in limiters])
+
+
+@categories_bp.route('/deck/<deck_id>/limiters', methods=['POST'])
+@jwt_required()
+def add_limiter(deck_id):
+    user_id = get_jwt_identity()
+    deck = _get_deck(deck_id, user_id)
+    if not deck:
+        return jsonify({'error': 'Deck not found'}), 404
+    data = request.get_json()
+    if not data or not data.get('target_category_id') or not data.get('source_category_ids'):
+        return jsonify({'error': 'target_category_id and source_category_ids required'}), 400
+    limiter = set_limiter(
+        deck_id=deck_id,
+        target_category_id=data['target_category_id'],
+        source_category_ids=data['source_category_ids'],
+        logic=data.get('logic', 'OR'),
+        trigger_count=data.get('trigger_count', 1),
+        accumulate=data.get('accumulate', False),
+    )
+    return jsonify(limiter.to_dict()), 201
+
+
+@categories_bp.route('/deck/<deck_id>/limiters/<int:limiter_id>', methods=['DELETE'])
+@jwt_required()
+def delete_limiter(deck_id, limiter_id):
+    user_id = get_jwt_identity()
+    deck = _get_deck(deck_id, user_id)
+    if not deck:
+        return jsonify({'error': 'Deck not found'}), 404
+    if remove_limiter(limiter_id):
+        return jsonify({'ok': True})
+    return jsonify({'error': 'Limiter not found'}), 404
+
+
+# --- Wait-for per assignment ---
+
+@categories_bp.route('/deck/<deck_id>/assignments/<int:assignment_id>/wait-for', methods=['POST'])
+@jwt_required()
+def set_wait_for(deck_id, assignment_id):
+    user_id = get_jwt_identity()
+    deck = _get_deck(deck_id, user_id)
+    if not deck:
+        return jsonify({'error': 'Deck not found'}), 404
+    data = request.get_json()
+    if data is None or 'category_ids' not in data:
+        return jsonify({'error': 'category_ids required'}), 400
+    set_assignment_wait_fors(assignment_id, data['category_ids'])
+    return jsonify({'ok': True})
+
+
+@categories_bp.route('/deck/<deck_id>/assignments/<int:assignment_id>/wait-for', methods=['GET'])
+@jwt_required()
+def get_wait_for(deck_id, assignment_id):
+    user_id = get_jwt_identity()
+    deck = _get_deck(deck_id, user_id)
+    if not deck:
+        return jsonify({'error': 'Deck not found'}), 404
+    from app.services.category_service import get_assignment_wait_fors
+    wait_fors = get_assignment_wait_fors(assignment_id)
+    return jsonify([{
+        'id': wf.id,
+        'category_id': wf.category_id,
+        'category_name': wf.category.name if wf.category else None,
+    } for wf in wait_fors])
