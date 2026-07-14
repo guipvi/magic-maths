@@ -647,3 +647,228 @@ def test_ao_mesmo_tempo_consumption_propagation():
 
     # ao_mesmo_tempo should propagate MORE consumption (larger delta)
     assert delta_ao > delta_sub
+
+
+# --- Card Filter (source_card_filters) Tests ---
+
+def test_limiter_card_filter_reduces_consumption():
+    """When source_card_filters limits which cards contribute, fewer events are consumed."""
+    categories = [
+        {'id': 1, 'name': 'creature', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    # 3 creatures: card_ids 1, 2, 3
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 4, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+
+    # No filter: all 3 creatures contribute
+    limiter_no_filter = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result_no_filter = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiter_no_filter)
+
+    # Filter: only card 1 contributes
+    limiter_filtered = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False,
+         'source_card_filters': {1: [1]}},
+    ]
+    result_filtered = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiter_filtered)
+
+    t1_no = result_no_filter['by_turn'][1]['categories'][2]
+    t1_flt = result_filtered['by_turn'][1]['categories'][2]
+
+    # With filter, fewer events consumed from creature into draw
+    # creature expected is same; draw total_expected should be less with filter
+    assert t1_no['total_expected'] > t1_flt['total_expected']
+
+
+def test_limiter_card_filter_no_filter_means_all_cards():
+    """When source_card_filters is None, all cards contribute (same as no filter key)."""
+    categories = [
+        {'id': 1, 'name': 'creature', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+
+    limiter_explicit_none = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False,
+         'source_card_filters': {1: None}},
+    ]
+    result_none = analyze_categories(
+        deck_size=40, categories=categories, assignments=assignments,
+        limiters=limiter_explicit_none)
+
+    limiter_no_key = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result_no_key = analyze_categories(
+        deck_size=40, categories=categories, assignments=assignments,
+        limiters=limiter_no_key)
+
+    t1_none = result_none['by_turn'][1]['categories'][2]
+    t1_no_key = result_no_key['by_turn'][1]['categories'][2]
+
+    # Both should produce the same result
+    assert t1_none['total_expected'] == pytest.approx(t1_no_key['total_expected'], abs=0.01)
+
+
+def test_limiter_card_filter_empty_list_treated_as_no_filter():
+    """Empty list filter is falsy, so the engine treats it as no filter (all cards pass)."""
+    categories = [
+        {'id': 1, 'name': 'creature', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+
+    # Empty filter list: engine treats it as no filter (all cards available)
+    limiter_empty = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False,
+         'source_card_filters': {1: []}},
+    ]
+    result_empty = analyze_categories(
+        deck_size=40, categories=categories, assignments=assignments,
+        limiters=limiter_empty)
+
+    limiter_no_filter = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+    result_no_filter = analyze_categories(
+        deck_size=40, categories=categories, assignments=assignments,
+        limiters=limiter_no_filter)
+
+    t1_empty = result_empty['by_turn'][1]['categories'][2]
+    t1_no = result_no_filter['by_turn'][1]['categories'][2]
+    # Both produce the same result: all creature events consumed into draw
+    assert t1_empty['total_expected'] == pytest.approx(t1_no['total_expected'], abs=0.01)
+
+
+def test_limiter_card_filter_and_logic():
+    """Card filter works with AND logic limiter."""
+    categories = [
+        {'id': 1, 'name': 'creature', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'ramp', 'color': '#22c55e', 'config': {}},
+        {'id': 3, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 3, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+
+    # AND limiter with card filter on creature source
+    limiter = [
+        {'target_category_id': 3, 'logic': 'AND', 'source_category_ids': [1, 2],
+         'trigger_count': 1, 'accumulate': False,
+         'source_card_filters': {1: [1]}},
+    ]
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiter)
+
+    t1 = result['by_turn'][1]['categories'][3]
+    # AND limiter should still work, consuming from both sources
+    # (only card 1 from creature, all of ramp)
+    assert t1['total_expected'] > t1['expected']
+
+
+def test_limiter_card_filter_proportional():
+    """Card filter scales consumption proportionally to filtered weight fraction."""
+    categories = [
+        {'id': 1, 'name': 'creature', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'draw', 'color': '#3b82f6', 'config': {}},
+    ]
+    # 4 creatures: two with multiplier 1.0, two with multiplier 2.0
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 3, 'category_id': 1, 'multiplier': 2.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 4, 'category_id': 1, 'multiplier': 2.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 5, 'category_id': 2, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+
+    # Filter to only the high-multiplier cards (3 and 4)
+    # Total weight = 1+1+2+2 = 6, filtered weight = 2+2 = 4, fraction = 4/6
+    limiter_filtered = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False,
+         'source_card_filters': {1: [3, 4]}},
+    ]
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiter_filtered)
+
+    # Also test with filter to only low-multiplier cards (1 and 2)
+    # filtered weight = 1+1 = 2, fraction = 2/6
+    limiter_low = [
+        {'target_category_id': 2, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False,
+         'source_card_filters': {1: [1, 2]}},
+    ]
+    result_low = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments,
+        limiters=limiter_low)
+
+    t1_high = result['by_turn'][1]['categories'][2]
+    t1_low = result_low['by_turn'][1]['categories'][2]
+
+    # High-weight filter should produce more draw events than low-weight filter
+    assert t1_high['total_expected'] > t1_low['total_expected']
+
+
+def test_card_eff_weight_tracking():
+    """Verify card_eff_weight is populated correctly with multipliers."""
+    categories = [
+        {'id': 1, 'name': 'creature', 'color': '#ef4444', 'config': {}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 1, 'multiplier': 3.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0,
+         'mana_amount': None, 'same_turn': None, 'is_permanent': None},
+    ]
+    result = analyze_categories(
+        deck_size=60, categories=categories, assignments=assignments)
+
+    cat_info = result['categories'][0]
+    # total_multiplier_sum = 3+1 = 4
+    assert cat_info['total_multiplier_sum'] == 4.0
+    # cards_assigned = 2
+    assert cat_info['cards_assigned'] == 2

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { decks, analysis } from '../services/api'
-import { Shield, Map, Bug, Tags, BarChart3, TrendingUp, Crown, Loader2 } from 'lucide-react'
+import { decks, analysis, trades } from '../services/api'
+import { Shield, Map, Bug, Tags, BarChart3, TrendingUp, Crown, Loader2, ArrowRightLeft } from 'lucide-react'
 import InteractionBreakdown from '../components/InteractionBreakdown'
 import LandRecommender from '../components/LandRecommender'
 import DebugPanel from '../components/DebugPanel'
@@ -10,6 +10,7 @@ import CategoryChart from '../components/CategoryChart'
 import ManaCurveChart from '../components/ManaCurveChart'
 import GoldfishSim from '../components/GoldfishSim'
 import CommanderConfig from '../components/CommanderConfig'
+import ExchangePanel from '../components/ExchangePanel'
 
 interface AnalysisData {
   interactions: any
@@ -24,6 +25,7 @@ export default function DeckAnalysis() {
   const { id } = useParams<{ id: string }>()
   const [deckInfo, setDeckInfo] = useState<any>(null)
   const [cards, setCards] = useState<any[]>([])
+  const [poolCards, setPoolCards] = useState<any[]>([])
   const [data, setData] = useState<AnalysisData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -36,11 +38,27 @@ export default function DeckAnalysis() {
     Promise.all([
       decks.get(id),
       analysis.full({ deck_id: id }),
+      trades.list(id).catch(() => ({ data: { trades: [] } })),
     ])
-      .then(([deckRes, analysisRes]) => {
+      .then(([deckRes, analysisRes, tradesRes]) => {
         setDeckInfo(deckRes.data.deck)
         setCards(deckRes.data.cards)
         setData(analysisRes.data)
+        const tradeList = tradesRes.data.trades || []
+        const seen = new Set<number>()
+        const incoming = tradeList
+          .map((t: any) => ({
+            card_id: t.card_in.id,
+            card: t.card_in,
+            _isPoolCard: true,
+            _tradeId: t.id,
+          }))
+          .filter((c: any) => {
+            if (seen.has(c.card_id)) return false
+            seen.add(c.card_id)
+            return true
+          })
+        setPoolCards(incoming)
       })
       .catch((err) => {
         setError(err.response?.data?.error || 'Erro ao carregar análise')
@@ -68,6 +86,7 @@ export default function DeckAnalysis() {
     { id: 'commander', label: 'Commander', icon: Crown },
     { id: 'interactions', label: 'Interações', icon: Shield },
     { id: 'lands', label: 'Terrenos', icon: Map },
+    { id: 'exchanges', label: 'Trocas', icon: ArrowRightLeft },
     { id: 'debug', label: 'Debug', icon: Bug },
   ]
 
@@ -76,7 +95,7 @@ export default function DeckAnalysis() {
       <div>
         <h1 className="text-2xl font-bold">{deckInfo?.name || 'Análise do Deck'}</h1>
         <p className="text-magic-muted text-sm mt-1">
-          {deckInfo?.format} &mdash; {cards.length} cards
+          {deckInfo?.format} &mdash; {cards.reduce((sum, c) => sum + (c.quantity || 1), 0)} cards
         </p>
       </div>
 
@@ -103,7 +122,7 @@ export default function DeckAnalysis() {
       <div>
         {activeTab === 'categories' && (
           <div className="space-y-6">
-            {id && <CategoryPanel deckId={id} cards={cards} onTriggersChange={() => setTriggerVersion(v => v + 1)} />}
+            {id && <CategoryPanel deckId={id} cards={cards} poolCards={poolCards} onTriggersChange={() => setTriggerVersion(v => v + 1)} />}
             {data?.categories && <CategoryChart data={data.categories} />}
           </div>
         )}
@@ -112,6 +131,16 @@ export default function DeckAnalysis() {
         {activeTab === 'commander' && id && <CommanderConfig deckId={id} cards={cards} commanderAnalysis={data?.commander} />}
         {activeTab === 'interactions' && <InteractionBreakdown data={data?.interactions} categories={data?.categories?.categories} />}
         {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} />}
+        {activeTab === 'exchanges' && id && (
+          <ExchangePanel 
+            deckId={id} 
+            cards={cards}
+            currentAnalysis={data}
+            onUpdate={() => {
+              setTriggerVersion(v => v + 1)
+            }} 
+          />
+        )}
         {activeTab === 'debug' && <DebugPanel cards={cards} analysis={data} />}
       </div>
     </div>

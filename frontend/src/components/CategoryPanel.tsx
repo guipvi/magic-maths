@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment, useMemo, useCallback } from 'react'
 import { categories as api } from '../services/api'
 import { Plus, Trash2, Tag, Zap, Link2, ArrowDown, Pencil, Check, X } from 'lucide-react'
 
@@ -13,10 +13,11 @@ function catLabel(c: any, allCats: any[]): string {
 interface Props {
   deckId: string
   cards: any[]
+  poolCards?: any[]
   onTriggersChange?: () => void
 }
 
-export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props) {
+export default function CategoryPanel({ deckId, cards, poolCards = [], onTriggersChange }: Props) {
   const [allCategories, setAllCategories] = useState<any[]>([])
   const [assignments, setAssignments] = useState<any[]>([])
   const [cardTriggers, setCardTriggers] = useState<any[]>([])
@@ -49,6 +50,15 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
 
   const refreshAssignments = () => {
     api.getAssignments(deckId).then(r => setAssignments(r.data))
+  }
+  const refreshAssignAndLimiters = () => {
+    Promise.all([
+      api.getAssignments(deckId),
+      api.getLimiters(deckId),
+    ]).then(([assnRes, limRes]) => {
+      setAssignments(assnRes.data)
+      setLimiters(limRes.data)
+    })
   }
   const refreshTriggers = () => {
     Promise.all([
@@ -98,9 +108,11 @@ export default function CategoryPanel({ deckId, cards, onTriggersChange }: Props
         <AssignmentManager
           categories={allCategories}
           cards={cards}
+          poolCards={poolCards}
           assignments={assignments}
+          limiters={limiters}
           deckId={deckId}
-          onRefresh={refreshAssignments}
+          onRefresh={refreshAssignAndLimiters}
         />
       )}
       {activeTab === 'triggers' && (
@@ -272,8 +284,8 @@ function CategoryManager({ categories, onRefresh }: { categories: any[], onRefre
   )
 }
 
-function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }: {
-  categories: any[]; cards: any[]; assignments: any[]; deckId: string; onRefresh: () => void
+function AssignmentManager({ categories, cards, poolCards, assignments, limiters, deckId, onRefresh }: {
+  categories: any[]; cards: any[]; poolCards: any[]; assignments: any[]; limiters: any[]; deckId: string; onRefresh: () => void
 }) {
   const [selectedCard, setSelectedCard] = useState<number | ''>('')
   const [selectedCategory, setSelectedCategory] = useState<number | ''>('')
@@ -283,6 +295,9 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
   const [isPermanent, setIsPermanent] = useState(true)
   const [maxPerTurn, setMaxPerTurn] = useState<number | ''>('')
   const [waitForCategories, setWaitForCategories] = useState<number[]>([])
+  const [limitCategoryId, setLimitCategoryId] = useState<number | ''>('')
+  const [limitOnlySubsequent, setLimitOnlySubsequent] = useState(false)
+  const [expandedLimiterFilter, setExpandedLimiterFilter] = useState<number | null>(null)
 
   const cat = categories.find(c => c.id === selectedCategory)
   const isRamp = cat?.config?.type === 'ramp'
@@ -302,6 +317,8 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
       max_per_turn: maxPerTurn === '' ? null : Number(maxPerTurn),
       tutored_card_id: isTutor ? (tutoredCard === '' ? null : Number(tutoredCard)) : null,
       wait_for_category_ids: waitForCategories.length > 0 ? waitForCategories : undefined,
+      limit_category_id: limitCategoryId === '' ? null : Number(limitCategoryId),
+      limit_only_subsequent: limitCategoryId !== '' ? limitOnlySubsequent : undefined,
     })
     onRefresh()
     setSelectedCard('')
@@ -313,6 +330,8 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
     setMaxPerTurn('')
     setTutoredCard('')
     setWaitForCategories([])
+    setLimitCategoryId('')
+    setLimitOnlySubsequent(false)
   }
 
   const handleRemove = async (assnId: number) => {
@@ -320,7 +339,82 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
     onRefresh()
   }
 
+  const childIdsOf = useMemo(() => {
+    const map = new Map<number, number[]>()
+    for (const c of categories) {
+      if (c.parent_id != null) {
+        const arr = map.get(c.parent_id) || []
+        arr.push(c.id)
+        map.set(c.parent_id, arr)
+      }
+    }
+    return map
+  }, [categories])
+
+  const getDescendantIds = useCallback((catId: number): number[] => {
+    const result = [catId]
+    const children = childIdsOf.get(catId)
+    if (children) {
+      for (const child of children) {
+        result.push(...getDescendantIds(child))
+      }
+    }
+    return result
+  }, [childIdsOf])
+
+  const catNameById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const c of categories) map.set(c.id, c.name)
+    return map
+  }, [categories])
+
+  type LimiterMatch = { limiter: any; sourceCategoryId: number; sourceCategoryName: string }
+
+  const getRelevantLimiters = useCallback((categoryId: number): LimiterMatch[] => {
+    const results: LimiterMatch[] = []
+    for (const lim of limiters) {
+      for (const srcId of (lim.source_category_ids || [])) {
+        const descendants = getDescendantIds(srcId)
+        if (descendants.includes(categoryId)) {
+          results.push({ limiter: lim, sourceCategoryId: srcId, sourceCategoryName: catNameById.get(srcId) || '?' })
+        }
+      }
+    }
+    return results
+  }, [limiters, getDescendantIds, catNameById])
+
+  const getSourceAllCards = useCallback((sourceCategoryId: number): number[] => {
+    const descendants = getDescendantIds(sourceCategoryId)
+    return [...new Set(
+      assignments.filter(a => descendants.includes(a.category_id)).map(a => a.card_id)
+    )]
+  }, [assignments, getDescendantIds])
+
+  const isCardInFilter = (limiter: any, sourceCategoryId: number, cardId: number) => {
+    const filter = limiter.source_card_filters?.[sourceCategoryId]
+    if (!filter) return true
+    return filter.includes(cardId)
+  }
+
+  const toggleLimiterFilter = async (limiter: any, sourceCategoryId: number, cardId: number) => {
+    const filter = limiter.source_card_filters?.[sourceCategoryId] || null
+    const allCards = getSourceAllCards(sourceCategoryId)
+    let newFilter: number[] | null
+    if (!filter) {
+      newFilter = allCards.filter((id: number) => id !== cardId)
+    } else if (filter.includes(cardId)) {
+      const filtered: number[] = filter.filter((id: number) => id !== cardId)
+      newFilter = filtered.length === 0 ? null : filtered
+    } else {
+      newFilter = [...filter, cardId]
+      if (newFilter.length >= allCards.length) newFilter = null
+    }
+    await api.updateSourceFilter(deckId, limiter.id, sourceCategoryId, newFilter)
+    onRefresh()
+  }
+
   const selectedCardData = cards.find((c: any) => c.card_id === selectedCard)
+    || poolCards.find((c: any) => c.card_id === selectedCard)
   const selectedCardImage = selectedCardData?.card?.image_uris?.normal || selectedCardData?.card?.image_uris?.small
 
   return (
@@ -342,9 +436,18 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
           <select value={selectedCard} onChange={e => setSelectedCard(Number(e.target.value))}
             className="input">
             <option value="">Selecionar carta...</option>
-            {cards.map((c: any, i: number) => (
-              <option key={i} value={c.card_id}>{c.card?.name}</option>
-            ))}
+            <optgroup label="Cartas do Deck">
+              {cards.map((c: any, i: number) => (
+                <option key={i} value={c.card_id}>{c.card?.name}</option>
+              ))}
+            </optgroup>
+            {poolCards.length > 0 && (
+              <optgroup label="Cartas do Pool (pendentes)">
+                {poolCards.map((c: any, i: number) => (
+                  <option key={`pool-${i}`} value={c.card_id}>{c.card?.name}</option>
+                ))}
+              </optgroup>
+            )}
           </select>
           <select value={selectedCategory} onChange={e => setSelectedCategory(Number(e.target.value))}
             className="input">
@@ -357,9 +460,18 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
             <select value={tutoredCard} onChange={e => setTutoredCard(Number(e.target.value))}
               className="input">
               <option value="">Selecionar carta tutoriada...</option>
-              {cards.filter((c: any) => c.card_id !== selectedCard).map((c: any, i: number) => (
-                <option key={i} value={c.card_id}>{c.card?.name}</option>
-              ))}
+              <optgroup label="Cartas do Deck">
+                {cards.filter((c: any) => c.card_id !== selectedCard).map((c: any, i: number) => (
+                  <option key={i} value={c.card_id}>{c.card?.name}</option>
+                ))}
+              </optgroup>
+              {poolCards.length > 0 && (
+                <optgroup label="Cartas do Pool (pendentes)">
+                  {poolCards.filter((c: any) => c.card_id !== selectedCard).map((c: any, i: number) => (
+                    <option key={`pool-${i}`} value={c.card_id}>{c.card?.name}</option>
+                  ))}
+                </optgroup>
+              )}
             </select>
           ) : isRamp ? (
             <input type="number" value={manaAmount} min={0}
@@ -424,6 +536,29 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
         <p className="text-[10px] text-magic-muted mt-1">OR — a atribuição só produz eventos se qualquer uma destas categorias tiver carta em campo</p>
       </div>
 
+      <div className="mb-4">
+        <label className="text-xs text-magic-muted">Limitar eventos por categoria</label>
+        <div className="flex flex-wrap items-center gap-2 mt-1">
+          <select value={limitCategoryId} onChange={e => {
+            setLimitCategoryId(e.target.value === '' ? '' : Number(e.target.value))
+            if (e.target.value === '') setLimitOnlySubsequent(false)
+          }} className="input text-xs py-1 min-w-[160px]">
+            <option value="">Sem limite</option>
+            {categories.filter(c => c.id !== selectedCategory).map(cat => (
+              <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+            ))}
+          </select>
+          {limitCategoryId !== '' && (
+            <label className="flex items-center gap-2 text-xs">
+              <input type="checkbox" checked={limitOnlySubsequent}
+                onChange={e => setLimitOnlySubsequent(e.target.checked)} />
+              Apenas subsequentes
+            </label>
+          )}
+        </div>
+        <p className="text-[10px] text-magic-muted mt-1">Eventos deste card são limitados por: min(eventos do card, eventos da categoria fonte)</p>
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
@@ -437,57 +572,124 @@ function AssignmentManager({ categories, cards, assignments, deckId, onRefresh }
               <th className="text-center py-2 px-2">Turno</th>
               <th className="text-center py-2 px-2">Tipo</th>
               <th className="text-left py-2 px-2">Tutoria</th>
+              <th className="text-left py-2 px-2">Limite</th>
               <th className="py-2 px-2"></th>
             </tr>
           </thead>
           <tbody>
-            {assignments.map(a => (
-              <tr key={a.id} className="border-b border-magic-border">
-                <td className="py-1 px-2">
-                  <div className="group relative inline-block">
-                    {a.card_image_uris?.small ? (
-                      <>
-                        <img src={a.card_image_uris.small} alt=""
-                          className="w-12 h-[68px] rounded object-cover shadow cursor-pointer" />
-                        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 hidden group-hover:block pointer-events-none">
-                          <img src={a.card_image_uris.normal || a.card_image_uris.small} alt=""
-                            className="h-[400px] w-auto rounded-xl shadow-2xl border-2 border-slate-600" />
-                        </div>
-                      </>
-                    ) : (
-                      <div className="w-12 h-[68px] rounded bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] text-magic-muted">
-                        N/A
+            {assignments.map(a => {
+              const isExpanded = expandedLimiterFilter === a.id
+              const relLimiters = getRelevantLimiters(a.category_id)
+              return (
+                <Fragment key={a.id}>
+                  <tr className="border-b border-magic-border">
+                    <td className="py-1 px-2">
+                      <div className="group relative inline-block">
+                        {a.card_image_uris?.small ? (
+                          <>
+                            <img src={a.card_image_uris.small} alt=""
+                              className="w-12 h-[68px] rounded object-cover shadow cursor-pointer" />
+                            <div className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-50 hidden group-hover:block pointer-events-none">
+                              <img src={a.card_image_uris.normal || a.card_image_uris.small} alt=""
+                                className="h-[400px] w-auto rounded-xl shadow-2xl border-2 border-slate-600" />
+                            </div>
+                          </>
+                        ) : (
+                          <div className="w-12 h-[68px] rounded bg-slate-800 border border-slate-700 flex items-center justify-center text-[10px] text-magic-muted">
+                            N/A
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                </td>
-                <td className="py-2 px-2">{a.card_name}</td>
-                <td className="py-2 px-2">
-                  <span className="inline-flex items-center gap-1">
-                    <div className="w-2 h-2 rounded-full" style={{
-                      backgroundColor: categories.find(c => c.id === a.category_id)?.color
-                    }} />
-                    {catLabel(categories.find(c => c.id === a.category_id) || a, categories)}
-                  </span>
-                </td>
-                <td className="py-2 px-2 text-right">{a.multiplier}</td>
-                <td className="py-2 px-2 text-right">{a.max_per_turn ?? '-'}</td>
-                <td className="py-2 px-2 text-right">{a.mana_amount ?? '-'}</td>
-                <td className="py-2 px-2 text-center">{a.same_turn ? 'Sim' : a.same_turn === false ? 'Não' : '-'}</td>
-                <td className="py-2 px-2 text-center">
-                  {a.is_permanent ? 'Perm' : a.is_permanent === false ? 'Ritual' : '-'}
-                </td>
-                <td className="py-2 px-2 text-left text-sm">
-                  {a.tutored_card_name || '-'}
-                </td>
-                <td className="py-2 px-2 text-right">
-                  <button onClick={() => handleRemove(a.id)}
-                    className="text-red-400 hover:text-red-300">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </td>
-              </tr>
-            ))}
+                    </td>
+                    <td className="py-2 px-2">{a.card_name}</td>
+                    <td className="py-2 px-2">
+                      <span className="inline-flex items-center gap-1">
+                        <div className="w-2 h-2 rounded-full" style={{
+                          backgroundColor: categories.find(c => c.id === a.category_id)?.color
+                        }} />
+                        {catLabel(categories.find(c => c.id === a.category_id) || a, categories)}
+                      </span>
+                    </td>
+                    <td className="py-2 px-2 text-right">{a.multiplier}</td>
+                    <td className="py-2 px-2 text-right">{a.max_per_turn ?? '-'}</td>
+                    <td className="py-2 px-2 text-right">{a.mana_amount ?? '-'}</td>
+                    <td className="py-2 px-2 text-center">{a.same_turn ? 'Sim' : a.same_turn === false ? 'Não' : '-'}</td>
+                    <td className="py-2 px-2 text-center">
+                      {a.is_permanent ? 'Perm' : a.is_permanent === false ? 'Ritual' : '-'}
+                    </td>
+                    <td className="py-2 px-2 text-left text-sm">
+                      {a.tutored_card_name || '-'}
+                    </td>
+                    <td className="py-2 px-2 text-left text-xs">
+                      {a.limit_category_id ? (
+                        <span className="inline-flex items-center gap-1">
+                          <div className="w-2 h-2 rounded-full" style={{
+                            backgroundColor: categories.find(c => c.id === a.limit_category_id)?.color
+                          }} />
+                          {catLabel(categories.find(c => c.id === a.limit_category_id) || {parent_id: null, name: String(a.limit_category_id)}, categories)}
+                          {a.limit_only_subsequent && <span className="text-amber-400 ml-0.5">*</span>}
+                        </span>
+                      ) : '-'}
+                    </td>
+                    <td className="py-2 px-2 text-right flex items-center gap-1 justify-end">
+                      {limiters.length > 0 && (
+                        <button onClick={() => setExpandedLimiterFilter(isExpanded ? null : a.id)}
+                          className={`transition-colors ${isExpanded ? 'text-indigo-400' : 'text-magic-muted hover:text-indigo-400'}`}
+                          title="Limitadores">
+                          <Link2 className="w-4 h-4" />
+                        </button>
+                      )}
+                      <button onClick={() => handleRemove(a.id)}
+                        className="text-red-400 hover:text-red-300">
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  </tr>
+                  {isExpanded && (
+                    <tr>
+                       <td colSpan={11} className="px-4 py-2 bg-slate-900/50">
+                        <div className="text-xs text-magic-muted mb-1">
+                          Contribuição em limitadores:
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {limiters.map(lim => {
+                            const match = relLimiters.find(m => m.limiter.id === lim.id)
+                            if (match) {
+                              const active = isCardInFilter(match.limiter, match.sourceCategoryId, a.card_id)
+                              return (
+                                <button key={`${lim.id}-${match.sourceCategoryId}`}
+                                  onClick={() => toggleLimiterFilter(match.limiter, match.sourceCategoryId, a.card_id)}
+                                  className={`inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors ${
+                                    active
+                                      ? 'bg-indigo-900/50 text-indigo-300 border border-indigo-700'
+                                      : 'bg-slate-800 text-magic-muted border border-slate-700 line-through'
+                                  }`}>
+                                  <div className={`w-1.5 h-1.5 rounded-full ${active ? 'bg-green-400' : 'bg-red-400'}`} />
+                                  {match.sourceCategoryName}
+                                  {' → '}
+                                  {lim.target_category_name || '?'}
+                                  <span className="text-[10px] opacity-60">({lim.trigger_count}x)</span>
+                                </button>
+                              )
+                            }
+                            return (
+                              <span key={lim.id}
+                                className="inline-flex items-center gap-1.5 px-2 py-1 rounded text-xs bg-slate-800/50 text-magic-muted/50 border border-slate-800">
+                                {lim.source_category_names?.join(', ') || '?'}
+                                {' → '}
+                                {lim.target_category_name || '?'}
+                                <span className="text-[10px]">({lim.trigger_count}x)</span>
+                                <span className="text-[10px] italic">não é fonte</span>
+                              </span>
+                            )
+                          })}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              )
+            })}
           </tbody>
         </table>
       </div>
@@ -735,28 +937,51 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
         <div className="space-y-2">
           {limiters.map(lim => {
             const tgtCat = categories.find(c => c.id === lim.target_category_id)
+            const hasCardFilters = lim.source_card_filters && Object.keys(lim.source_card_filters).length > 0
             return (
-              <div key={lim.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
-                <div className="flex items-center gap-3 text-sm flex-wrap">
-                  {(lim.source_category_names || []).map((name: string, i: number) => (
-                    <span key={i}>
-                      <span className="font-medium text-indigo-300">{name}</span>
-                      {i < lim.source_category_names.length - 1 && (
-                        <span className="text-magic-muted mx-1">{lim.logic}</span>
-                      )}
+              <div key={lim.id} className="px-3 py-2 bg-slate-800 rounded-lg">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3 text-sm flex-wrap">
+                    {(lim.source_category_names || []).map((name: string, i: number) => {
+                      const srcId = lim.source_category_ids[i]
+                      const filter = lim.source_card_filters?.[srcId]
+                      const filterCount = filter?.length || 0
+                      return (
+                        <span key={i}>
+                          <span className="font-medium text-indigo-300">{name}</span>
+                          {filterCount > 0 && (
+                            <span className="text-[10px] text-amber-400 ml-1">({filterCount} cards)</span>
+                          )}
+                          {i < lim.source_category_names.length - 1 && (
+                            <span className="text-magic-muted mx-1">{lim.logic}</span>
+                          )}
+                        </span>
+                      )
+                    })}
+                    <span className="text-magic-muted">→ {lim.trigger_count}x →</span>
+                    <span className="font-medium text-green-300">
+                      {catLabel(tgtCat || {parent_id: null, name: lim.target_category_name || String(lim.target_category_id)}, categories)}
                     </span>
-                  ))}
-                  <span className="text-magic-muted">→ {lim.trigger_count}x →</span>
-                  <span className="font-medium text-green-300">
-                    {catLabel(tgtCat || {parent_id: null, name: lim.target_category_name || String(lim.target_category_id)}, categories)}
-                  </span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-magic-muted">{lim.logic}</span>
-                  {lim.accumulate && <span className="text-[10px] text-amber-400">acumula</span>}
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-magic-muted">{lim.logic}</span>
+                    {lim.accumulate && <span className="text-[10px] text-amber-400">acumula</span>}
+                  </div>
+                  <button onClick={() => handleRemoveLimiter(lim.id)}
+                    className="text-red-400 hover:text-red-300">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
-                <button onClick={() => handleRemoveLimiter(lim.id)}
-                  className="text-red-400 hover:text-red-300">
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                {hasCardFilters && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {Object.entries(lim.source_card_filters).map(([catId, cardIds]) => {
+                      const cat = categories.find(c => c.id === Number(catId))
+                      return (
+                        <span key={catId} className="text-[10px] text-magic-muted">
+                          {cat?.name}: {(cardIds as number[]).length} cards filtrados
+                        </span>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
             )
           })}

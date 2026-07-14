@@ -1,0 +1,10 @@
+$ vite
+
+  VITE v5.4.21  ready in 188 ms
+
+  ➜  Local:   http://localhost:5173/
+  ➜  Network: http://169.254.0.21:5173/
+6:48:29 PM [vite] hmr update /src/pages/DeckAnalysis.tsx, /src/index.css
+2:52:37 PM [vite] hmr update /src/pages/DeckAnalysis.tsx, /src/index.css
+2:54:42 PM [vite] hmr update /src/components/ExchangePanel.tsx, /src/index.css
+2:54:46 PM [vite] hmr update /src/pages/DeckAnalysis.tsx, /src/index.css

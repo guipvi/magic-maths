@@ -6,9 +6,10 @@ from app.models.category import (Category, DeckCardCategory,
                                   DeckCardTrigger, DeckCategoryEventLimiter,
                                   DeckCategoryEventLimiterSource, DeckAssignmentWaitFor,
                                   CategoryContainment)
+from app.models.pending_trade import PendingTrade
 
 __all__ = ['User', 'Card', 'Collection', 'Deck', 'DeckCard', 'DeckCommanderConfig',
            'Category', 'DeckCardCategory',
            'DeckCardTrigger', 'DeckCategoryEventLimiter',
            'DeckCategoryEventLimiterSource', 'DeckAssignmentWaitFor',
-           'CategoryContainment']
+           'CategoryContainment', 'PendingTrade']

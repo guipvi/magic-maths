@@ -1,0 +1,145 @@
+ * Serving Flask app 'app'
+ * Debug mode: on
+[31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5555
+ * Running on http://169.254.0.21:5555
+[33mPress CTRL+C to quit[0m
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+127.0.0.1 - - [13/Jul/2026 18:37:39] "GET /api/health HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:39:00] "[35m[1mPOST /api/auth/register HTTP/1.1[0m" 201 -
+127.0.0.1 - - [13/Jul/2026 18:39:00] "GET /api/decks HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:39:00] "GET /api/decks HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:08] "[35m[1mPOST /api/decks/import HTTP/1.1[0m" 201 -
+127.0.0.1 - - [13/Jul/2026 18:40:08] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "POST /api/analysis/full HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "POST /api/analysis/full HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:40:09] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/test_limiter_integration.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/test_limiter_integration.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/app/routes/analysis.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/app/services/category_analysis.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/app/services/category_analysis.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/test_limiter_integration.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+127.0.0.1 - - [13/Jul/2026 18:46:09] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:09] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:09] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:09] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:12] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:12] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:20] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:20] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:20] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:20] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:22] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:27] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:27] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:28] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:28] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:30] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:30] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:30] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:30] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:30] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:31] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:31] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:46:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/app/models/deck.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+ * Detected change in '/home/ubuntu/magic-maths/magic-maths/backend/app/routes/analysis.py', reloading
+ * Restarting with stat
+ * Debugger is active!
+ * Debugger PIN: 568-092-151
+127.0.0.1 - - [13/Jul/2026 18:48:30] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:30] "POST /api/analysis/full HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:48:31] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:35] "GET /api/auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:35] "GET /api/auth/me HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:35] "GET /api/decks HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:35] "GET /api/decks HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "POST /api/analysis/full HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "POST /api/analysis/full HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729 HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:38] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:48] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:48] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:48] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:48] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:51] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:49:51] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:38] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:38] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:38] "GET /api/decks/5fc78bbb-0921-48e2-86a8-1e2535507729/commander HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:38] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/assignments HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/containment HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/limiters HTTP/1.1" 200 -
+127.0.0.1 - - [13/Jul/2026 18:52:40] "GET /api/categories/deck/5fc78bbb-0921-48e2-86a8-1e2535507729/card-triggers HTTP/1.1" 200 -

@@ -19,6 +19,7 @@ def create_app(config_class=Config):
     from app.routes.analysis import analysis_bp
     from app.routes.categories import categories_bp
     from app.routes.commander import commander_bp
+    from app.routes.trades import trades_bp
 
     app.register_blueprint(auth_bp, url_prefix='/api/auth')
     app.register_blueprint(decks_bp, url_prefix='/api/decks')
@@ -26,6 +27,7 @@ def create_app(config_class=Config):
     app.register_blueprint(analysis_bp, url_prefix='/api/analysis')
     app.register_blueprint(categories_bp, url_prefix='/api/categories')
     app.register_blueprint(commander_bp, url_prefix='/api/decks')
+    app.register_blueprint(trades_bp, url_prefix='/api/decks')
 
     # ensure tables exist and seed default categories
     with app.app_context():
