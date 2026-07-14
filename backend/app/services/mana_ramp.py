@@ -50,7 +50,7 @@ def _hypergeom_cdf(n_deck, n_success, n_draw, k):
 
 def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=None,
                        categories=None, card_triggers=None,
-                       category_analysis_result=None):
+                       category_analysis_result=None, max_turns=10):
     if deck_size is None:
         deck_size = len(deck_cards)
 
@@ -62,17 +62,17 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=
     if category_analysis_result:
         return _analyze_mana_from_cat_result(
             deck_size, land_count, avg_cmc, categories or [],
-            category_analysis_result,
+            category_analysis_result, max_turns=max_turns,
         )
 
     if assignments and categories:
         return _analyze_mana_via_categories(
             deck_cards, deck_size, land_count, avg_cmc, simulations,
-            assignments, categories, card_triggers,
+            assignments, categories, card_triggers, max_turns=max_turns,
         )
 
     results = {}
-    for turn in range(1, 11):
+    for turn in range(1, max_turns + 1):
         n_drawn = min(7 + (turn - 1), deck_size)
         prob_lands = []
         max_k = min(land_count, int(n_drawn))
@@ -109,7 +109,7 @@ def analyze_mana_ramp(deck_cards, deck_size=None, simulations=5000, assignments=
 
 
 def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, simulations,
-                                  assignments, categories, card_triggers):
+                                  assignments, categories, card_triggers, max_turns=10):
     from app.services.category_analysis import analyze_categories
 
     cat_result = analyze_categories(
@@ -117,6 +117,7 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
         categories=categories,
         assignments=assignments,
         card_triggers=card_triggers,
+        max_turns=max_turns,
     )
 
     ramp_cats = {c['id']: c for c in categories if c.get('config', {}).get('type') == 'ramp'}
@@ -160,7 +161,7 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
 
     # Pre-compute expected extra draws from draw categories per turn
     extra_draws_by_turn = {}
-    for turn in range(1, 11):
+    for turn in range(1, max_turns + 1):
         turn_data = cat_result['by_turn'].get(turn, {})
         cat_entries = turn_data.get('categories', {})
         extra = 0.0
@@ -170,7 +171,7 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
         extra_draws_by_turn[turn] = extra
 
     results = {}
-    for turn in range(1, 11):
+    for turn in range(1, max_turns + 1):
         base_drawn = 7 + (turn - 1)
         extra_draws = extra_draws_by_turn.get(turn, 0.0)
         cards_drawn_by_turn = min(base_drawn + extra_draws, deck_size)

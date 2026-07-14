@@ -77,6 +77,42 @@ DEFAULT_SUBCATEGORIES: list[dict] = [
 ]
 
 
+def _migrate_add_card_ids_filter():
+    """Add card_ids_filter column to deck_category_event_limiter_sources if missing."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(db.engine)
+    if 'deck_category_event_limiter_sources' not in inspector.get_table_names():
+        return
+    columns = {col['name'] for col in inspector.get_columns('deck_category_event_limiter_sources')}
+    if 'card_ids_filter' not in columns:
+        db.session.execute(text(
+            'ALTER TABLE deck_category_event_limiter_sources '
+            'ADD COLUMN card_ids_filter TEXT'
+        ))
+        db.session.commit()
+
+
+def _migrate_add_assignment_limit():
+    """Add limit_category_id and limit_only_subsequent to deck_card_categories if missing."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(db.engine)
+    if 'deck_card_categories' not in inspector.get_table_names():
+        return
+    columns = {col['name'] for col in inspector.get_columns('deck_card_categories')}
+    if 'limit_category_id' not in columns:
+        db.session.execute(text(
+            'ALTER TABLE deck_card_categories '
+            'ADD COLUMN limit_category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL'
+        ))
+        db.session.commit()
+    if 'limit_only_subsequent' not in columns:
+        db.session.execute(text(
+            'ALTER TABLE deck_card_categories '
+            'ADD COLUMN limit_only_subsequent BOOLEAN DEFAULT 0'
+        ))
+        db.session.commit()
+
+
 def seed_default_categories():
     # Migration: clear parent_id and is_default from old "interaction" parent
     old_interaction = Category.query.filter_by(name='interaction', is_default=True).first()
@@ -127,6 +163,8 @@ def seed_default_categories():
     db.session.commit()
 
     _migrate_triggers_to_limiters()
+    _migrate_add_card_ids_filter()
+    _migrate_add_assignment_limit()
 
 
 def _migrate_triggers_to_limiters():
@@ -232,6 +270,23 @@ def delete_category(category_id):
         return False
     if cat.children:
         return None  # signal: has children, can't delete
+
+    from app.models.category import (
+        DeckCardCategory, DeckCardTrigger, DeckCategoryEventLimiter,
+        DeckCategoryEventLimiterSource, DeckAssignmentWaitFor,
+        CategoryContainment,
+    )
+
+    DeckAssignmentWaitFor.query.filter_by(category_id=category_id).delete(synchronize_session='fetch')
+    DeckCategoryEventLimiterSource.query.filter_by(source_category_id=category_id).delete(synchronize_session='fetch')
+    DeckCategoryEventLimiter.query.filter_by(target_category_id=category_id).delete(synchronize_session='fetch')
+    DeckCardTrigger.query.filter_by(target_category_id=category_id).delete(synchronize_session='fetch')
+    DeckCardCategory.query.filter_by(category_id=category_id).delete(synchronize_session='fetch')
+    CategoryContainment.query.filter(
+        (CategoryContainment.container_category_id == category_id) |
+        (CategoryContainment.contained_category_id == category_id)
+    ).delete(synchronize_session='fetch')
+
     db.session.delete(cat)
     db.session.commit()
     return True
@@ -247,7 +302,8 @@ def get_deck_assignments(deck_id):
 def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
                         mana_amount=None, same_turn=None, is_permanent=None,
                         max_per_turn=None, tutored_card_id=None,
-                        wait_for_category_ids=None):
+                        wait_for_category_ids=None,
+                        limit_category_id=None, limit_only_subsequent=None):
     existing = (DeckCardCategory.query
                 .filter_by(deck_id=deck_id, card_id=card_id,
                            category_id=category_id)
@@ -259,6 +315,8 @@ def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
         existing.is_permanent = is_permanent
         existing.max_per_turn = max_per_turn
         existing.tutored_card_id = tutored_card_id
+        existing.limit_category_id = limit_category_id
+        existing.limit_only_subsequent = limit_only_subsequent or False
         assn = existing
     else:
         assn = DeckCardCategory(
@@ -266,6 +324,8 @@ def set_card_assignment(deck_id, card_id, category_id, multiplier=1.0,
             multiplier=multiplier, mana_amount=mana_amount,
             same_turn=same_turn, is_permanent=is_permanent,
             max_per_turn=max_per_turn, tutored_card_id=tutored_card_id,
+            limit_category_id=limit_category_id,
+            limit_only_subsequent=limit_only_subsequent or False,
         )
         db.session.add(assn)
     db.session.flush()
@@ -350,7 +410,8 @@ def get_deck_limiters(deck_id):
 
 
 def set_limiter(deck_id, target_category_id, source_category_ids,
-                logic='OR', trigger_count=1, accumulate=False):
+                logic='OR', trigger_count=1, accumulate=False,
+                source_card_filters=None):
     existing = (DeckCategoryEventLimiter.query
                 .filter_by(deck_id=deck_id,
                            target_category_id=target_category_id)
@@ -373,10 +434,13 @@ def set_limiter(deck_id, target_category_id, source_category_ids,
         db.session.add(limiter)
     db.session.flush()
 
+    filters = source_card_filters or {}
     for src_cat_id in source_category_ids:
+        card_filter = filters.get(src_cat_id)
         db.session.add(DeckCategoryEventLimiterSource(
             limiter_id=limiter.id,
             source_category_id=src_cat_id,
+            card_ids_filter=card_filter if card_filter else None,
         ))
 
     db.session.commit()
@@ -390,6 +454,17 @@ def remove_limiter(limiter_id):
     db.session.delete(limiter)
     db.session.commit()
     return True
+
+
+def update_limiter_source_card_filter(limiter_id, source_category_id, card_ids_filter):
+    source = DeckCategoryEventLimiterSource.query.filter_by(
+        limiter_id=limiter_id,
+        source_category_id=source_category_id).first()
+    if not source:
+        return None
+    source.card_ids_filter = card_ids_filter if card_ids_filter else None
+    db.session.commit()
+    return source
 
 
 # --- DeckAssignmentWaitFor CRUD ---

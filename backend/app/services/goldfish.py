@@ -173,6 +173,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                     'logic': lim.get('logic', 'OR'),
                     'trigger_count': lim.get('trigger_count', 1),
                     'accumulate': lim.get('accumulate', False),
+                    'card_filters': lim.get('source_card_filters') or {},
                 })
 
     rng = np.random.default_rng(42)
@@ -305,6 +306,12 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                         for cat_id in card_to_categories.get(card_id, set()):
                             source_events[cat_id] += 1
 
+                    # Build per-card source events for card filter support
+                    source_card_events = defaultdict(lambda: defaultdict(float))
+                    for card_id in cast_this_turn_ids:
+                        for cat_id in card_to_categories.get(card_id, set()):
+                            source_card_events[cat_id][card_id] += 1
+
                     limiter_draws = 0.0
                     for tgt_cat_id, limiter_list in limiter_map.items():
                         for lim in limiter_list:
@@ -312,9 +319,16 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                             logic = lim['logic']
                             count = lim['trigger_count']
                             cap = cat_max_per_turn.get(tgt_cat_id, 0)
+                            card_filters = lim.get('card_filters', {})
+
+                            def _src_avail(cat_id):
+                                cf = card_filters.get(cat_id)
+                                if cf:
+                                    return sum(source_card_events[cat_id].get(cid, 0) for cid in cf)
+                                return source_events.get(cat_id, 0)
 
                             if logic == 'OR':
-                                total_available = sum(source_events.get(s, 0) for s in src_ids)
+                                total_available = sum(_src_avail(s) for s in src_ids)
                                 if total_available <= 0:
                                     continue
                                 needed = float('inf')
@@ -323,10 +337,17 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                 consumed = min(total_available, needed) if needed != float('inf') else total_available
                                 ratio = consumed / total_available if total_available > 0 else 0
                                 for s in src_ids:
-                                    se = source_events.get(s, 0)
-                                    if se > 0:
-                                        consumed_from_s = se * ratio
-                                        source_events[s] -= consumed_from_s
+                                    avail = _src_avail(s)
+                                    if avail > 0:
+                                        consumed_from_s = avail * ratio
+                                        if card_filters.get(s):
+                                            for cid, ev in source_card_events[s].items():
+                                                if cid in card_filters[s] and ev > 0:
+                                                    portion = ev / avail * consumed_from_s if avail > 0 else 0
+                                                    source_card_events[s][cid] -= portion
+                                            source_events[s] = sum(source_card_events[s].values())
+                                        else:
+                                            source_events[s] -= consumed_from_s
                                         # Propagate consumption to containers
                                         if s in contained_by_map:
                                             for container_id in contained_by_map[s]:
@@ -342,7 +363,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                     limiter_draws += produced
 
                             elif logic == 'AND':
-                                avail = [source_events.get(s, 0) for s in src_ids]
+                                avail = [_src_avail(s) for s in src_ids]
                                 if any(a <= 0 for a in avail):
                                     continue
                                 per_source = min(avail)
@@ -352,7 +373,16 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                 consumed_total = min(per_source * len(src_ids), needed) if needed != float('inf') else per_source * len(src_ids)
                                 per_source_actual = consumed_total / len(src_ids)
                                 for s in src_ids:
-                                    source_events[s] -= per_source_actual
+                                    avail_s = _src_avail(s)
+                                    if avail_s > 0:
+                                        if card_filters.get(s):
+                                            for cid, ev in source_card_events[s].items():
+                                                if cid in card_filters[s] and ev > 0:
+                                                    portion = ev / avail_s * per_source_actual if avail_s > 0 else 0
+                                                    source_card_events[s][cid] -= portion
+                                            source_events[s] = sum(source_card_events[s].values())
+                                        else:
+                                            source_events[s] -= per_source_actual
                                     # Propagate consumption to containers
                                     if s in contained_by_map:
                                         for container_id in contained_by_map[s]:

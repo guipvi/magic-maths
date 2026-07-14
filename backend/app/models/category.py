@@ -16,7 +16,7 @@ class Category(db.Model):
 
     parent = db.relationship('Category', remote_side='Category.id', backref='children')
 
-    assignments = db.relationship('DeckCardCategory', backref='category', lazy='dynamic')
+    assignments = db.relationship('DeckCardCategory', backref='category', lazy='dynamic', foreign_keys='[DeckCardCategory.category_id]')
 
     def to_dict(self):
         return {
@@ -40,16 +40,19 @@ class DeckCardCategory(db.Model):
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False)
     card_id = db.Column(db.Integer, db.ForeignKey('cards.id'), nullable=False)
-    category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    category_id = db.Column(db.Integer, db.ForeignKey('categories.id', ondelete='CASCADE'), nullable=False)
     multiplier = db.Column(db.Float, default=1.0)
     mana_amount = db.Column(db.Integer, nullable=True)
     same_turn = db.Column(db.Boolean, nullable=True)
     is_permanent = db.Column(db.Boolean, nullable=True)
     max_per_turn = db.Column(db.Integer, nullable=True)
     tutored_card_id = db.Column(db.Integer, db.ForeignKey('cards.id'), nullable=True)
+    limit_category_id = db.Column(db.Integer, db.ForeignKey('categories.id', ondelete='SET NULL'), nullable=True)
+    limit_only_subsequent = db.Column(db.Boolean, default=False)
 
     card = db.relationship('Card', backref='category_assignments', foreign_keys=[card_id])
     tutored_card = db.relationship('Card', foreign_keys=[tutored_card_id])
+    limit_category = db.relationship('Category', foreign_keys=[limit_category_id])
 
     __table_args__ = (
         db.UniqueConstraint('deck_id', 'card_id', 'category_id', name='uq_deck_card_category'),
@@ -71,6 +74,9 @@ class DeckCardCategory(db.Model):
             'max_per_turn': self.max_per_turn,
             'tutored_card_id': self.tutored_card_id,
             'tutored_card_name': self.tutored_card.name if self.tutored_card else None,
+            'limit_category_id': self.limit_category_id,
+            'limit_category_name': self.limit_category.name if self.limit_category else None,
+            'limit_only_subsequent': self.limit_only_subsequent,
         }
 
 
@@ -81,7 +87,7 @@ class DeckCardTrigger(db.Model):
     deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False)
     source_assignment_id = db.Column(db.Integer, db.ForeignKey('deck_card_categories.id'),
                                      nullable=False)
-    target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id', ondelete='CASCADE'), nullable=False)
     trigger_count = db.Column(db.Integer, default=1)
     per_turn = db.Column(db.JSON, nullable=True)
 
@@ -117,7 +123,7 @@ class DeckCategoryEventLimiter(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False)
-    target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id', ondelete='CASCADE'), nullable=False)
     logic = db.Column(db.String(3), default='OR')
     trigger_count = db.Column(db.Integer, default=1)
     accumulate = db.Column(db.Boolean, default=False)
@@ -145,6 +151,11 @@ class DeckCategoryEventLimiter(db.Model):
                 s.source_category.name if s.source_category else None
                 for s in self.sources
             ],
+            'source_card_filters': {
+                s.source_category_id: s.card_ids_filter
+                for s in self.sources
+                if s.card_ids_filter
+            } or None,
         }
 
 
@@ -157,8 +168,9 @@ class DeckCategoryEventLimiterSource(db.Model):
                                          ondelete='CASCADE'),
                            nullable=False)
     source_category_id = db.Column(db.Integer,
-                                   db.ForeignKey('categories.id'),
+                                   db.ForeignKey('categories.id', ondelete='CASCADE'),
                                    nullable=False)
+    card_ids_filter = db.Column(db.JSON, nullable=True)
 
     source_category = db.relationship('Category',
                                       foreign_keys=[source_category_id])
@@ -178,7 +190,7 @@ class DeckAssignmentWaitFor(db.Model):
                                             ondelete='CASCADE'),
                               nullable=False)
     category_id = db.Column(db.Integer,
-                            db.ForeignKey('categories.id'),
+                            db.ForeignKey('categories.id', ondelete='CASCADE'),
                             nullable=False)
 
     category = db.relationship('Category', foreign_keys=[category_id])
@@ -194,10 +206,10 @@ class CategoryContainment(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     container_category_id = db.Column(db.Integer,
-                                      db.ForeignKey('categories.id'),
+                                      db.ForeignKey('categories.id', ondelete='CASCADE'),
                                       nullable=False)
     contained_category_id = db.Column(db.Integer,
-                                      db.ForeignKey('categories.id'),
+                                      db.ForeignKey('categories.id', ondelete='CASCADE'),
                                       nullable=False)
     mode = db.Column(db.String(20), default='subcategoria')
 

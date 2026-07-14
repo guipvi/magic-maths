@@ -9,6 +9,7 @@ from app.services.category_service import (
     get_deck_assignments, set_card_assignment, remove_card_assignment,
     get_deck_card_triggers, set_card_trigger, remove_card_trigger,
     get_deck_limiters, set_limiter, remove_limiter,
+    update_limiter_source_card_filter,
     set_assignment_wait_fors,
     build_containment_graph, get_containment_edges, add_containment,
     remove_containment,
@@ -118,6 +119,8 @@ def add_assignment(deck_id):
         max_per_turn=data.get('max_per_turn'),
         tutored_card_id=data.get('tutored_card_id'),
         wait_for_category_ids=data.get('wait_for_category_ids'),
+        limit_category_id=data.get('limit_category_id'),
+        limit_only_subsequent=data.get('limit_only_subsequent'),
     )
     return jsonify(assn.to_dict()), 201
 
@@ -209,6 +212,7 @@ def add_limiter(deck_id):
         logic=data.get('logic', 'OR'),
         trigger_count=data.get('trigger_count', 1),
         accumulate=data.get('accumulate', False),
+        source_card_filters=data.get('source_card_filters'),
     )
     return jsonify(limiter.to_dict()), 201
 
@@ -223,6 +227,26 @@ def delete_limiter(deck_id, limiter_id):
     if remove_limiter(limiter_id):
         return jsonify({'ok': True})
     return jsonify({'error': 'Limiter not found'}), 404
+
+
+@categories_bp.route('/deck/<deck_id>/limiters/<int:limiter_id>/source-filter', methods=['PUT'])
+@jwt_required()
+def update_source_card_filter(deck_id, limiter_id):
+    user_id = get_jwt_identity()
+    deck = _get_deck(deck_id, user_id)
+    if not deck:
+        return jsonify({'error': 'Deck not found'}), 404
+    data = request.get_json()
+    if not data or 'source_category_id' not in data:
+        return jsonify({'error': 'source_category_id required'}), 400
+    source = update_limiter_source_card_filter(
+        limiter_id=limiter_id,
+        source_category_id=data['source_category_id'],
+        card_ids_filter=data.get('card_ids_filter'),
+    )
+    if not source:
+        return jsonify({'error': 'Source not found'}), 404
+    return jsonify({'ok': True})
 
 
 # --- Wait-for per assignment ---

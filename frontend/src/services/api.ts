@@ -77,6 +77,20 @@ export const analysis = {
     api.post('/analysis/land-recommendation', data),
   full: (data: { deck_id?: string; cards?: any[] }) =>
     api.post('/analysis/full', data),
+  whatIf: (data: { deck_id: string }) =>
+    api.post('/analysis/what-if', data),
+};
+
+export const trades = {
+  list: (deckId: string) => api.get(`/decks/${deckId}/trades`),
+  create: (deckId: string, data: { card_out_name: string; card_in_name: string; quantity?: number }) =>
+    api.post(`/decks/${deckId}/trades`, data),
+  update: (deckId: string, tradeId: number, data: { planned_assignment?: any; planned_triggers?: any; quantity?: number }) =>
+    api.put(`/decks/${deckId}/trades/${tradeId}`, data),
+  remove: (deckId: string, tradeId: number) =>
+    api.delete(`/decks/${deckId}/trades/${tradeId}`),
+  execute: (deckId: string) =>
+    api.post(`/decks/${deckId}/trades/execute`),
 };
 
 export const categories = {
@@ -93,6 +107,7 @@ export const categories = {
     mana_amount?: number | null; same_turn?: boolean | null;
     is_permanent?: boolean | null; max_per_turn?: number | null;
     tutored_card_id?: number | null; wait_for_category_ids?: number[];
+    limit_category_id?: number | null; limit_only_subsequent?: boolean;
   }) => api.post(`/categories/deck/${deckId}/assignments`, data),
   removeAssignment: (deckId: string, assignmentId: number) =>
     api.delete(`/categories/deck/${deckId}/assignments/${assignmentId}`),
@@ -109,9 +124,15 @@ export const categories = {
   setLimiter: (deckId: string, data: {
     target_category_id: number; logic: 'AND' | 'OR';
     source_category_ids: number[]; trigger_count?: number; accumulate?: boolean;
+    source_card_filters?: Record<number, number[] | null>;
   }) => api.post(`/categories/deck/${deckId}/limiters`, data),
   removeLimiter: (deckId: string, limiterId: number) =>
     api.delete(`/categories/deck/${deckId}/limiters/${limiterId}`),
+  updateSourceFilter: (deckId: string, limiterId: number, sourceCategoryId: number, cardIdsFilter: number[] | null) =>
+    api.put(`/categories/deck/${deckId}/limiters/${limiterId}/source-filter`, {
+      source_category_id: sourceCategoryId,
+      card_ids_filter: cardIdsFilter,
+    }),
   getWaitFor: (deckId: string, assignmentId: number) =>
     api.get(`/categories/deck/${deckId}/assignments/${assignmentId}/wait-for`),
   setWaitFor: (deckId: string, assignmentId: number, categoryIds: number[]) =>

@@ -205,11 +205,72 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                 if wf_indices:
                     wait_for_by_idx.setdefault(idx, []).append(list(wf_indices))
 
+    # Per-card effective weight tracking (for limiter card filters)
+    # cat_idx -> card_id -> effective_weight_in_this_category
+    from collections import defaultdict
+    card_eff_weight = defaultdict(lambda: defaultdict(float))
+
+    for assn in assignments:
+        cid = assn['category_id']
+        if cid in cat_index:
+            idx = cat_index[cid]
+            card_id = assn['card_id']
+            mult = assn.get('mana_amount') if assn.get('mana_amount') is not None else assn.get('multiplier', 1.0)
+            card_eff_weight[idx][card_id] += mult
+            # Roll up to parent categories
+            pid = cat_parent.get(cid)
+            while pid is not None:
+                if pid in cat_index:
+                    pidx = cat_index[pid]
+                    n_ch = len(direct_children_of.get(pid, set())) if direct_children_of else 0
+                    if n_ch > 0:
+                        card_eff_weight[pidx][card_id] += mult / n_ch
+                    else:
+                        card_eff_weight[pidx][card_id] += mult
+                pid = cat_parent.get(pid)
+            # Roll up through containment
+            if cid in contained_by_map:
+                for container_id in contained_by_map[cid]:
+                    if container_id in cat_index and container_id != cid:
+                        cidx = cat_index[container_id]
+                        mode = (containment_modes or {}).get((container_id, cid))
+                        if mode == 'ao_mesmo_tempo':
+                            card_eff_weight[cidx][card_id] += mult
+                        else:
+                            n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 0
+                            if n_ch > 0:
+                                card_eff_weight[cidx][card_id] += mult / n_ch
+                            else:
+                                card_eff_weight[cidx][card_id] += mult
+
     # Identify draw category indices for iterative draw feedback
     draw_indices = set()
     for i, cid in enumerate(cat_ids):
         if cat_map[cid].get('config', {}).get('type') == 'draw':
             draw_indices.add(i)
+
+    # 0. Convert assignment-level limiters to engine limiters
+    if assignments:
+        for assn in assignments:
+            tgt_cat = assn.get('category_id')
+            limit_cat = assn.get('limit_category_id')
+            if limit_cat and tgt_cat:
+                if limiters is None:
+                    limiters = []
+                # Check if this specific card-level limiter already exists as a deck limiter
+                # (Simplified: just add it if not present)
+                exists = any(l.get('target_category_id') == tgt_cat and 
+                             limit_cat in l.get('source_category_ids', [])
+                             for l in limiters)
+                if not exists:
+                    limiters.append({
+                        'target_category_id': tgt_cat,
+                        'logic': 'OR',
+                        'source_category_ids': [limit_cat],
+                        'trigger_count': 1,
+                        'accumulate': False,
+                        'source_card_filters': {limit_cat: [assn['card_id']]} if assn.get('limit_only_subsequent') else None
+                    })
 
     # Surplus pool for accumulate categories
     surplus = np.zeros(n_cats)
@@ -231,7 +292,19 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
 
             # 2. Expected direct events (weighted by diluted effective weight)
             pool = np.zeros(n_cats)
+            # Track which categories are targets of limiters to avoid double counting base events
+            limiter_targets = set()
+            if limiters:
+                for lim in limiters:
+                    limiter_targets.add(cat_index[lim['target_category_id']])
+
             for i in range(n_cats):
+                # If a category is a target of a limiter, its events are produced by the limiter,
+                # not by the base assignment (resource-pool model).
+                if i in limiter_targets:
+                    pool[i] = 0.0
+                    continue
+
                 raw = n_drawn * effective_weight[i] / deck_size if deck_size > 0 else 0.0
                 if max_per_turn_by_cat[i] > 0:
                     pool[i] = min(raw, max_per_turn_by_cat[i])
@@ -284,18 +357,18 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         continue
                     tgt_idx = cat_index[tgt]
                     sources = lim.get('source_category_ids', [])
+                    source_card_filters = lim.get('source_card_filters') or {}
                     # Expand source categories through containment
-                    expanded_sources = set()
+                    # Track (src_idx, original_cat_id) for card filter lookup
+                    expanded_sources = []
                     for s in sources:
                         if s in cat_index:
-                            expanded_sources.add(cat_index[s])
-                            # Also include all categories contained by this source
+                            expanded_sources.append((cat_index[s], s))
                             if containment_map and s in containment_map:
                                 for contained_id in containment_map[s]:
                                     if contained_id in cat_index:
-                                        expanded_sources.add(cat_index[contained_id])
-                    src_indices = list(expanded_sources)
-                    if not src_indices:
+                                        expanded_sources.append((cat_index[contained_id], s))
+                    if not expanded_sources:
                         continue
                     count = lim.get('trigger_count', 1)
                     logic = lim.get('logic', 'OR')
@@ -308,30 +381,45 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                         continue
                     needed_events = target_headroom / count if count > 0 else 0
 
+                    def _src_available(src_idx, orig_cat_id):
+                        card_filter = source_card_filters.get(orig_cat_id)
+                        if not card_filter:
+                            return pool[src_idx]
+                        total_w = sum(card_eff_weight.get(src_idx, {}).values())
+                        if total_w <= 0:
+                            return 0.0
+                        filtered_w = sum(card_eff_weight.get(src_idx, {}).get(cid, 0)
+                                         for cid in card_filter)
+                        return pool[src_idx] * (filtered_w / total_w)
+
                     if logic == 'OR':
-                        total_available = sum(pool[s] for s in src_indices if pool[s] > 0)
+                        total_available = sum(_src_available(si, oc)
+                                              for si, oc in expanded_sources
+                                              if pool[si] > 0)
                         if total_available <= 0:
                             continue
                         consumed_total = min(total_available, needed_events)
                         ratio = consumed_total / total_available
-                        for s in src_indices:
-                            if pool[s] > 0:
-                                consumed_from_s = pool[s] * ratio
-                                pool[s] -= consumed_from_s
-                                _propagate_consumption(s, consumed_from_s, pool, cat_ids,
+                        for si, oc in expanded_sources:
+                            avail = _src_available(si, oc)
+                            if avail > 0:
+                                consumed_from_s = avail * ratio
+                                consumed_from_s = min(consumed_from_s, pool[si])
+                                pool[si] -= consumed_from_s
+                                _propagate_consumption(si, consumed_from_s, pool, cat_ids,
                                                        cat_index, contained_by_map, direct_children_of,
                                                        containment_modes)
                         pool[tgt_idx] += consumed_total * count
                     elif logic == 'AND':
-                        avail = [pool[s] for s in src_indices if pool[s] > 0]
-                        if len(avail) < len(src_indices):
+                        avail = [_src_available(si, oc) for si, oc in expanded_sources]
+                        if any(a <= 0 for a in avail):
                             continue
                         per_source = min(avail)
-                        consumed_total = min(per_source * len(src_indices), needed_events)
-                        per_source_actual = consumed_total / len(src_indices)
-                        for s in src_indices:
-                            pool[s] -= per_source_actual
-                            _propagate_consumption(s, per_source_actual, pool, cat_ids,
+                        consumed_total = min(per_source * len(avail), needed_events)
+                        per_source_actual = consumed_total / len(avail)
+                        for si, oc in expanded_sources:
+                            pool[si] -= per_source_actual
+                            _propagate_consumption(si, per_source_actual, pool, cat_ids,
                                                    cat_index, contained_by_map, direct_children_of,
                                                    containment_modes)
                         pool[tgt_idx] += consumed_total * count

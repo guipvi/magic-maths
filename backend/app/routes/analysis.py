@@ -27,8 +27,11 @@ def _get_deck_cards(deck_id, user_id):
         return None, None
     deck_cards = []
     for dc in deck.cards.filter_by(is_sideboard=False).all():
+        card_dict = dc.card.to_light_dict()
+        # Ensure we add 'quantity' to the card dict if needed by some downstream logic, 
+        # but the engine expects a list of individual cards expanded by quantity.
         for _ in range(dc.quantity):
-            deck_cards.append(dc.card.to_light_dict())
+            deck_cards.append(card_dict.copy())
     return deck, deck_cards
 
 
@@ -66,7 +69,7 @@ def _load_assignments(deck_id, cards):
 
     assignments = []
     for a in assn_raw:
-        for _ in range(card_counts.get(a.card_id, 1)):
+        for _ in range(card_counts.get(a.card_id, 0)):
             entry = {
                 'card_id': a.card_id,
                 'category_id': a.category_id,
@@ -75,6 +78,8 @@ def _load_assignments(deck_id, cards):
                 'same_turn': a.same_turn,
                 'is_permanent': a.is_permanent,
                 'max_per_turn': a.max_per_turn,
+                'limit_category_id': a.limit_category_id,
+                'limit_only_subsequent': a.limit_only_subsequent,
             }
             wf = wait_for_map.get(a.id)
             if wf:
@@ -102,7 +107,7 @@ def _load_category_data(deck_id, cards):
         if ct.source_assignment:
             src_cat_id = ct.source_assignment.category_id
             card_id = ct.source_assignment.card_id
-            qty = card_counts.get(card_id, 1)
+            qty = card_counts.get(card_id, 0)
             card_triggers.append({
                 'source_card_id': card_id,
                 'source_category_id': src_cat_id,
@@ -293,7 +298,7 @@ def full_analysis():
     with ThreadPoolExecutor(max_workers=5) as pool:
         mana_future = pool.submit(
             _run_with_app_context, app, analyze_mana_ramp, cards, len(cards), 5000,
-            assignments, cat_list, card_triggers)
+            assignments, cat_list, card_triggers, max_turns=15)
         gold_future = pool.submit(
             _run_with_app_context, app, simulate_goldfish, cards, len(cards), 1000,
             assignments, cat_list, card_triggers, limiters, containment_map,
@@ -310,7 +315,7 @@ def full_analysis():
         if cat_list and assignments:
             cat_future = pool.submit(
                 _run_with_app_context, app, analyze_categories, len(cards), cat_list,
-                assignments, card_triggers=card_triggers,
+                assignments, card_triggers=card_triggers, max_turns=15,
                 limiters=limiters, containment_map=containment_map,
                 direct_children_of=direct_children_of,
                 containment_modes=containment_modes)
@@ -369,6 +374,119 @@ def full_analysis():
     })
 
 
+@analysis_bp.route('/what-if', methods=['POST'])
+@jwt_required()
+def what_if_analysis():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    if not data or not data.get('deck_id'):
+        return jsonify({'error': 'deck_id required'}), 400
+
+    deck_id = data['deck_id']
+    deck, cards = _get_deck_cards(deck_id, user_id)
+    if cards is None:
+        return jsonify({'error': 'Deck not found'}), 404
+
+    from app.models.pending_trade import PendingTrade
+    trades = PendingTrade.query.filter_by(deck_id=deck_id).all()
+    if not trades:
+        return jsonify({'error': 'No pending trades'}), 400
+
+    modified_cards = list(cards)
+    traded_out_ids = set()
+    for trade in trades:
+        out_id = trade.card_out_id
+        in_card = trade.card_in.to_light_dict() if trade.card_in else None
+        if not in_card:
+            continue
+        removed = 0
+        new_cards = []
+        for c in modified_cards:
+            if c.get('id') == out_id and removed < trade.quantity:
+                removed += 1
+                traded_out_ids.add(out_id)
+                for _ in range(trade.quantity):
+                    new_cards.append(in_card.copy())
+            else:
+                new_cards.append(c)
+        modified_cards = new_cards
+
+    assignments = _load_assignments(deck_id, modified_cards)
+    cat_list, card_triggers, limiters, containment_map, direct_children_of, containment_modes = _load_category_data(deck_id, modified_cards)
+
+    assignments = [a for a in assignments if a['card_id'] not in traded_out_ids]
+    card_triggers = [ct for ct in card_triggers if ct['source_card_id'] not in traded_out_ids]
+
+    for trade in trades:
+        if not trade.planned_assignment or not trade.card_in:
+            continue
+        pa = trade.planned_assignment
+        entry = {
+            'card_id': trade.card_in.id,
+            'category_id': pa['category_id'],
+            'multiplier': pa.get('multiplier', 1.0),
+            'mana_amount': pa.get('mana_amount'),
+            'same_turn': pa.get('same_turn'),
+            'is_permanent': pa.get('is_permanent'),
+            'max_per_turn': pa.get('max_per_turn'),
+            'tutored_card_id': pa.get('tutored_card_id'),
+            'limit_category_id': pa.get('limit_category_id'),
+            'limit_only_subsequent': pa.get('limit_only_subsequent', False),
+        }
+        wf_ids = pa.get('wait_for_category_ids', [])
+        if wf_ids:
+            entry['wait_for_category_ids'] = wf_ids
+        assignments.append(entry)
+
+        if trade.planned_triggers:
+            for pt in trade.planned_triggers:
+                card_triggers.append({
+                    'source_card_id': trade.card_in.id,
+                    'source_category_id': pa['category_id'],
+                    'target_category_id': pt['target_category_id'],
+                    'trigger_count': pt.get('trigger_count', 1),
+                    'quantity': trade.quantity,
+                    'per_turn': pt.get('per_turn'),
+                })
+
+    from concurrent.futures import ThreadPoolExecutor
+    app = current_app._get_current_object()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        mana_future = pool.submit(
+            _run_with_app_context, app, analyze_mana_ramp, modified_cards, len(modified_cards), 5000,
+            assignments, cat_list, card_triggers, max_turns=15)
+        gold_future = pool.submit(
+            _run_with_app_context, app, simulate_goldfish, modified_cards, len(modified_cards), 1000,
+            assignments, cat_list, card_triggers, limiters, containment_map,
+            direct_children_of, containment_modes)
+
+        if cat_list and assignments:
+            cat_future = pool.submit(
+                _run_with_app_context, app, analyze_categories, len(modified_cards), cat_list,
+                assignments, card_triggers=card_triggers, max_turns=15,
+                limiters=limiters, containment_map=containment_map,
+                direct_children_of=direct_children_of,
+                containment_modes=containment_modes)
+        else:
+            cat_future = None
+
+        int_future = pool.submit(
+            _run_with_app_context, app, analyze_interactions_from_assignments, deck_id, modified_cards)
+
+        mana_result = mana_future.result()
+        gold_result = gold_future.result()
+        cat_result = cat_future.result() if cat_future else None
+        int_result = int_future.result()
+
+    return jsonify({
+        'mana_ramp': mana_result,
+        'goldfish': gold_result,
+        'interactions': int_result,
+        'categories': cat_result,
+    })
+
+
 @analysis_bp.route('/categories', methods=['POST'])
 @jwt_required()
 def categories_analysis():
@@ -421,7 +539,7 @@ def categories_analysis():
             wait_for_map[a.id] = [wf.category_id for wf in wfs]
 
     for a in assignments_raw:
-        for _ in range(card_counts.get(a.card_id, 1)):
+        for _ in range(card_counts.get(a.card_id, 0)):
             entry = {
                 'card_id': a.card_id,
                 'category_id': a.category_id,
@@ -441,7 +559,7 @@ def categories_analysis():
         if ct.source_assignment:
             src_cat_id = ct.source_assignment.category_id
             card_id = ct.source_assignment.card_id
-            qty = card_counts.get(card_id, 1)
+            qty = card_counts.get(card_id, 0)
             card_triggers.append({
                 'source_card_id': card_id,
                 'source_category_id': src_cat_id,
