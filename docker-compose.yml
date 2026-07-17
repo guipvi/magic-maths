@@ -29,7 +29,7 @@ services:
     networks:
       - magic-net
 
-  frontend:
+  magic-maths:
     build:
       context: ./frontend
     container_name: magic-maths-web
