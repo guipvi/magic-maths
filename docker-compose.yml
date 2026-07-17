@@ -2,7 +2,6 @@ services:
 
   db:
     image: postgres:17-alpine
-    container_name: magic-maths-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: magicmaths
@@ -10,14 +9,13 @@ services:
       POSTGRES_DB: magicmaths
     volumes:
       - pgdata:/var/lib/postgresql/data
-    networks:
-      - magic-net
 
   backend:
     build:
       context: ./backend
-    container_name: magic-maths-api
     restart: unless-stopped
+    ports:
+      - "5555:5555"
     depends_on:
       - db
     environment:
@@ -26,22 +24,15 @@ services:
       - JWT_SECRET_KEY=476ed638a5cd93253344d69dbec8c2fb6027ed5f471a419c9aa651df9c3e0f3d
       - FLASK_APP=run.py
       - FLASK_ENV=production
-    networks:
-      - magic-net
 
   magic-maths:
     build:
       context: ./frontend
-    container_name: magic-maths-web
     restart: unless-stopped
+    ports:
+      - "8080:80"
     depends_on:
       - backend
-    networks:
-      - magic-net
 
 volumes:
   pgdata:
-
-networks:
-  magic-net:
-    driver: bridge
