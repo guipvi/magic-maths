@@ -315,23 +315,48 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                 source_events = defaultdict(float)
                 for card_id in cast_this_turn_ids:
                     for cat_id in card_to_categories.get(card_id, set()):
-                        source_events[cat_id] += card_multiplier.get((card_id, cat_id), 1.0)
+                        mult = card_multiplier.get((card_id, cat_id), 1.0)
+                        source_events[cat_id] += mult
                         pid = parent_map.get(cat_id)
                         while pid is not None:
-                            source_events[pid] += card_multiplier.get((card_id, cat_id), 1.0)
+                            source_events[pid] += mult
                             pid = parent_map.get(pid)
+                        if cat_id in contained_by_map:
+                            for container_id in contained_by_map[cat_id]:
+                                mode = (containment_modes or {}).get((container_id, cat_id))
+                                if mode == 'ao_mesmo_tempo':
+                                    source_events[container_id] += mult
+                                else:
+                                    n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                    if n_ch > 0:
+                                        source_events[container_id] += mult / n_ch
                 for bf_card_id in battlefield:
                     if bf_card_id not in cast_this_turn_ids:
                         for cat_id in card_to_categories.get(bf_card_id, set()):
-                            source_events[cat_id] += card_multiplier.get((bf_card_id, cat_id), 1.0)
+                            mult = card_multiplier.get((bf_card_id, cat_id), 1.0)
+                            source_events[cat_id] += mult
                             pid = parent_map.get(cat_id)
                             while pid is not None:
-                                source_events[pid] += card_multiplier.get((bf_card_id, cat_id), 1.0)
+                                source_events[pid] += mult
                                 pid = parent_map.get(pid)
+                            if cat_id in contained_by_map:
+                                for container_id in contained_by_map[cat_id]:
+                                    mode = (containment_modes or {}).get((container_id, cat_id))
+                                    if mode == 'ao_mesmo_tempo':
+                                        source_events[container_id] += mult
+                                    else:
+                                        n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                        if n_ch > 0:
+                                            source_events[container_id] += mult / n_ch
 
                 for trig in trigger_list:
                     src_cat_id = trig['source_category_id']
-                    src_events = source_events.get(src_cat_id, 0)
+                    # Expand trigger source through containment
+                    expanded_trig_srcs = [src_cat_id]
+                    if containment_map and src_cat_id in containment_map:
+                        for contained_id in containment_map[src_cat_id]:
+                            expanded_trig_srcs.append(contained_id)
+                    src_events = sum(source_events.get(s, 0) for s in expanded_trig_srcs)
                     if src_events <= 0:
                         continue
                     # Check condition: source_card must be on battlefield
@@ -359,7 +384,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
 
                 # Process event limiters (multi-source AND/OR)
                 if limiter_map:
-                    # Build source events from cast cards with multiplier and parent rollup
+                    # Build source events from cast cards with multiplier, parent and containment rollup
                     source_events = defaultdict(float)
                     source_card_events = defaultdict(lambda: defaultdict(float))
                     for card_id in cast_this_turn_ids:
@@ -372,6 +397,18 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                 source_events[pid] += mult
                                 source_card_events[pid][card_id] += mult
                                 pid = parent_map.get(pid)
+                            if cat_id in contained_by_map:
+                                for container_id in contained_by_map[cat_id]:
+                                    mode = (containment_modes or {}).get((container_id, cat_id))
+                                    if mode == 'ao_mesmo_tempo':
+                                        source_events[container_id] += mult
+                                        source_card_events[container_id][card_id] += mult
+                                    else:
+                                        n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                        if n_ch > 0:
+                                            diluted = mult / n_ch
+                                            source_events[container_id] += diluted
+                                            source_card_events[container_id][card_id] += diluted
 
                     # Battlefield permanents also contribute events (they can be sacrificed)
                     for bf_card_id in battlefield:
@@ -385,6 +422,18 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                     source_events[pid] += mult
                                     source_card_events[pid][bf_card_id] += mult
                                     pid = parent_map.get(pid)
+                                if cat_id in contained_by_map:
+                                    for container_id in contained_by_map[cat_id]:
+                                        mode = (containment_modes or {}).get((container_id, cat_id))
+                                        if mode == 'ao_mesmo_tempo':
+                                            source_events[container_id] += mult
+                                            source_card_events[container_id][bf_card_id] += mult
+                                        else:
+                                            n_ch = len(direct_children_of.get(container_id, set())) if direct_children_of else 1
+                                            if n_ch > 0:
+                                                diluted = mult / n_ch
+                                                source_events[container_id] += diluted
+                                                source_card_events[container_id][bf_card_id] += diluted
 
                     limiter_draws = 0.0
                     for tgt_cat_id, limiter_list in limiter_map.items():
