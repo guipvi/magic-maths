@@ -1,6 +1,14 @@
 import { useState } from 'react'
 import { Plus, Trash2, GripVertical, ChevronDown } from 'lucide-react'
 
+function catLabel(c: any, allCats: any[]): string {
+  if (c.parent_id) {
+    const parent = allCats.find(p => p.id === c.parent_id)
+    if (parent) return `${parent.name} › ${c.name}`
+  }
+  return c.name
+}
+
 interface Condition {
   id: string
   type: 'category'
@@ -196,7 +204,7 @@ export default function CommanderConditionBuilder({ conditionGroups, onUpdate, a
                       <option value={0}>Selecionar categoria...</option>
                       {allCategories.map(cat => (
                         <option key={cat.id} value={cat.id}>
-                          {cat.name}
+                          {catLabel(cat, allCategories)}
                         </option>
                       ))}
                     </select>

@@ -3,6 +3,14 @@ import { commander as api, categories as catApi } from '../services/api'
 import { Crown, Save, Trash2, Plus, GripVertical } from 'lucide-react'
 import CommanderConditionBuilder from './CommanderConditionBuilder'
 
+function catLabel(c: any, allCats: any[]): string {
+  if (c.parent_id) {
+    const parent = allCats.find(p => p.id === c.parent_id)
+    if (parent) return `${parent.name} › ${c.name}`
+  }
+  return c.name
+}
+
 interface Props {
   deckId: string
   cards: any[]
@@ -180,7 +188,7 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
               >
                 <option value={0}>Selecionar categoria...</option>
                 {allCategories.map(cat => (
-                  <option key={cat.id} value={cat.id}>{cat.name}</option>
+                  <option key={cat.id} value={cat.id}>{catLabel(cat, allCategories)}</option>
                 ))}
               </select>
               <span className="text-magic-muted text-sm shrink-0">min</span>
@@ -274,7 +282,7 @@ export default function CommanderConfig({ deckId, cards, commanderAnalysis }: Pr
                         const cat = allCategories.find(c => c.id === cr.category_id)
                         return (
                           <th key={i} className="text-center py-2 px-2">
-                            {cat?.name || `Cat ${cr.category_id}`} ({cr.required}x)
+                            {cat ? catLabel(cat, allCategories) : `Cat ${cr.category_id}`} ({cr.required}x)
                           </th>
                         )
                       })}
