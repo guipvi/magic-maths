@@ -31,13 +31,14 @@ export default function DeckAnalysis() {
   const [error, setError] = useState('')
   const [activeTab, setActiveTab] = useState<string>('categories')
   const [triggerVersion, setTriggerVersion] = useState(0)
+  const [maxSpeedGoldfish, setMaxSpeedGoldfish] = useState(false)
 
   useEffect(() => {
     if (!id) return
     setLoading(true)
     Promise.all([
       decks.get(id),
-      analysis.full({ deck_id: id }),
+      analysis.full({ deck_id: id, max_speed: maxSpeedGoldfish }),
       trades.list(id).catch(() => ({ data: { trades: [] } })),
     ])
       .then(([deckRes, analysisRes, tradesRes]) => {
@@ -64,7 +65,7 @@ export default function DeckAnalysis() {
         setError(err.response?.data?.error || 'Erro ao carregar análise')
       })
       .finally(() => setLoading(false))
-  }, [id, triggerVersion])
+  }, [id, triggerVersion, maxSpeedGoldfish])
 
   if (loading) {
     return (
@@ -127,7 +128,13 @@ export default function DeckAnalysis() {
           </div>
         )}
         {activeTab === 'mana' && data?.mana_ramp && <ManaCurveChart data={data.mana_ramp} />}
-        {activeTab === 'goldfish' && data?.goldfish && <GoldfishSim data={data.goldfish} />}
+        {activeTab === 'goldfish' && data?.goldfish && (
+          <GoldfishSim
+            data={data.goldfish}
+            maxSpeed={maxSpeedGoldfish}
+            onToggleMaxSpeed={() => setMaxSpeedGoldfish(v => !v)}
+          />
+        )}
         {activeTab === 'commander' && id && <CommanderConfig deckId={id} cards={cards} commanderAnalysis={data?.commander} />}
         {activeTab === 'interactions' && <InteractionBreakdown data={data?.interactions} categories={data?.categories?.categories} />}
         {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} />}
