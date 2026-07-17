@@ -189,12 +189,14 @@ def goldfish():
         return jsonify({'error': 'No cards found'}), 400
 
     sim_count = data.get('simulations', 2000)
+    max_speed = data.get('max_speed', False)
     result = simulate_goldfish(cards, deck_size=len(cards), simulations=sim_count,
                                 assignments=assignments, categories=categories,
                                 card_triggers=card_triggers, limiters=limiters,
                                 containment_map=containment_map,
                                 direct_children_of=direct_children_of,
-                                containment_modes=containment_modes)
+                                containment_modes=containment_modes,
+                                max_speed=max_speed)
     return jsonify(result)
 
 
@@ -302,7 +304,7 @@ def full_analysis():
         gold_future = pool.submit(
             _run_with_app_context, app, simulate_goldfish, cards, len(cards), 1000,
             assignments, cat_list, card_triggers, limiters, containment_map,
-            direct_children_of, containment_modes)
+            direct_children_of, containment_modes, data.get('max_speed', False))
         land_future = pool.submit(
             _run_with_app_context, app, recommend_lands, cards, len(cards), assignments)
 
@@ -459,7 +461,7 @@ def what_if_analysis():
         gold_future = pool.submit(
             _run_with_app_context, app, simulate_goldfish, modified_cards, len(modified_cards), 1000,
             assignments, cat_list, card_triggers, limiters, containment_map,
-            direct_children_of, containment_modes)
+            direct_children_of, containment_modes, data.get('max_speed', False))
 
         if cat_list and assignments:
             cat_future = pool.submit(

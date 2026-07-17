@@ -14,9 +14,11 @@ import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianG
 
 interface Props {
   data: any
+  maxSpeed?: boolean
+  onToggleMaxSpeed?: () => void
 }
 
-export default function GoldfishSim({ data }: Props) {
+export default function GoldfishSim({ data, maxSpeed, onToggleMaxSpeed }: Props) {
   const turnData = data.turn_by_turn || []
 
   const chartData = turnData.map((t: any) => ({
@@ -39,6 +41,24 @@ export default function GoldfishSim({ data }: Props) {
 
   return (
     <div className="space-y-6">
+      {onToggleMaxSpeed && (
+        <div className="flex items-center gap-3">
+          <button
+            onClick={onToggleMaxSpeed}
+            className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+              maxSpeed
+                ? 'bg-amber-600 text-white'
+                : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+            }`}
+          >
+            {maxSpeed ? '⚡ Max Speed ON' : '⚡ Max Speed'}
+          </button>
+          <span className="text-xs text-magic-muted">
+            Casta draws sempre que não houver ramp pra castar antes
+          </span>
+        </div>
+      )}
+
       <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
         {stats.map((s) => (
           <div key={s.label} className="card text-center">

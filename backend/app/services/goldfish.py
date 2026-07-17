@@ -52,6 +52,7 @@ def _build_category_map(assignments, categories):
             'mana_amount': mana_amt,
             'same_turn': same_turn,
             'category_id': cat_id,
+            'multiplier': a.get('multiplier', 1.0),
         })
     return cat_map
 
@@ -118,7 +119,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                        assignments=None, categories=None,
                        card_triggers=None, limiters=None,
                        containment_map=None, direct_children_of=None,
-                       containment_modes=None):
+                       containment_modes=None, max_speed=False):
     if deck_size is None:
         deck_size = sum(c.get('quantity', 1) for c in deck_cards)
 
@@ -188,6 +189,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
         ramp_mana_arr = [0] * total_cards
         is_ramp_arr = [0] * total_cards
         is_draw_arr = [0] * total_cards
+        draw_multiplier_arr = [1] * total_cards
         same_turn_arr = [True] * total_cards
 
         for i, c in enumerate(classified):
@@ -202,6 +204,8 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                             same_turn_arr[i] = st
                     elif entry['type'] == 'draw':
                         is_draw_arr[i] = 1
+                        draw_multiplier_arr[i] = max(draw_multiplier_arr[i],
+                                                     int(entry.get('multiplier', 1)))
 
         hand_indices = deck[:7]
         library = deck[7:]
@@ -244,8 +248,9 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                         mana_available += mana_gained
                     spent = True
 
-            # Phase 2: play draw cards if hand is low
-            if len(hand) <= 3:
+            # Phase 2: play draw cards (refill hand)
+            should_play_draws = max_speed or len(hand) <= 3
+            if should_play_draws:
                 spent = True
                 while spent:
                     spent = False
@@ -257,10 +262,11 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                         hand.remove(to_cast)
                         cast_this_turn_ids.add(classified[to_cast].get('id'))
                         mana_available -= cmc_arr[to_cast]
-                        # Simulate drawing 1 card per draw spell
-                        if library:
-                            drawn = library.pop(0)
-                            hand.append(drawn)
+                        n_draw = max(1, draw_multiplier_arr[to_cast])
+                        for _ in range(n_draw):
+                            if library:
+                                drawn = library.pop(0)
+                                hand.append(drawn)
                         spent = True
 
             # Phase 3: play highest CMC affordable

@@ -69,13 +69,13 @@ export const collection = {
 export const analysis = {
   manaRamp: (data: { deck_id?: string; cards?: any[] }) =>
     api.post('/analysis/mana-ramp', data),
-  goldfish: (data: { deck_id?: string; cards?: any[]; simulations?: number }) =>
+  goldfish: (data: { deck_id?: string; cards?: any[]; simulations?: number; max_speed?: boolean }) =>
     api.post('/analysis/goldfish', data),
   interactions: (data: { deck_id?: string; cards?: any[] }) =>
     api.post('/analysis/interactions', data),
   landRecommendation: (data: { deck_id?: string; cards?: any[] }) =>
     api.post('/analysis/land-recommendation', data),
-  full: (data: { deck_id?: string; cards?: any[] }) =>
+  full: (data: { deck_id?: string; cards?: any[]; max_speed?: boolean }) =>
     api.post('/analysis/full', data),
   whatIf: (data: { deck_id: string }) =>
     api.post('/analysis/what-if', data),
