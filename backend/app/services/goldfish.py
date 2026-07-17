@@ -150,9 +150,18 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
             card_to_categories[a.get('card_id')].add(a.get('category_id'))
 
     cat_type_by_id = {}
+    parent_map = {}
     if categories:
         for c in categories:
             cat_type_by_id[c['id']] = c.get('config', {}).get('type', '')
+            pid = c.get('parent_id')
+            if pid is not None:
+                parent_map[c['id']] = pid
+
+    card_multiplier = {}
+    if assignments:
+        for a in assignments:
+            card_multiplier[(a.get('card_id'), a.get('category_id'))] = a.get('multiplier', 1.0)
 
     cat_max_per_turn = defaultdict(float)
     if assignments:
@@ -306,17 +315,32 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
 
                 # Process event limiters (multi-source AND/OR)
                 if limiter_map:
-                    # Build source events from cast cards
+                    # Build source events from cast cards with multiplier and parent rollup
                     source_events = defaultdict(float)
-                    for card_id in cast_this_turn_ids:
-                        for cat_id in card_to_categories.get(card_id, set()):
-                            source_events[cat_id] += 1
-
-                    # Build per-card source events for card filter support
                     source_card_events = defaultdict(lambda: defaultdict(float))
                     for card_id in cast_this_turn_ids:
                         for cat_id in card_to_categories.get(card_id, set()):
-                            source_card_events[cat_id][card_id] += 1
+                            mult = card_multiplier.get((card_id, cat_id), 1.0)
+                            source_events[cat_id] += mult
+                            source_card_events[cat_id][card_id] += mult
+                            pid = parent_map.get(cat_id)
+                            while pid is not None:
+                                source_events[pid] += mult
+                                source_card_events[pid][card_id] += mult
+                                pid = parent_map.get(pid)
+
+                    # Battlefield permanents also contribute events (they can be sacrificed)
+                    for bf_card_id in battlefield:
+                        if bf_card_id not in cast_this_turn_ids:
+                            for cat_id in card_to_categories.get(bf_card_id, set()):
+                                mult = card_multiplier.get((bf_card_id, cat_id), 1.0)
+                                source_events[cat_id] += mult
+                                source_card_events[cat_id][bf_card_id] += mult
+                                pid = parent_map.get(cat_id)
+                                while pid is not None:
+                                    source_events[pid] += mult
+                                    source_card_events[pid][bf_card_id] += mult
+                                    pid = parent_map.get(pid)
 
                     limiter_draws = 0.0
                     for tgt_cat_id, limiter_list in limiter_map.items():
@@ -327,14 +351,23 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                             cap = cat_max_per_turn.get(tgt_cat_id, 0)
                             card_filters = lim.get('card_filters', {})
 
-                            def _src_avail(cat_id):
-                                cf = card_filters.get(cat_id)
+                            # Expand source categories through containment
+                            expanded_src = []
+                            for s in src_ids:
+                                expanded_src.append((s, s))
+                                if containment_map and s in containment_map:
+                                    for contained_id in containment_map[s]:
+                                        expanded_src.append((contained_id, s))
+
+                            def _src_avail(cat_id, orig_cat_id=None):
+                                lookup = orig_cat_id or cat_id
+                                cf = card_filters.get(lookup)
                                 if cf:
                                     return sum(source_card_events[cat_id].get(cid, 0) for cid in cf)
                                 return source_events.get(cat_id, 0)
 
                             if logic == 'OR':
-                                total_available = sum(_src_avail(s) for s in src_ids)
+                                total_available = sum(_src_avail(s, oc) for s, oc in expanded_src)
                                 if total_available <= 0:
                                     continue
                                 needed = float('inf')
@@ -342,13 +375,13 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                     needed = max(0, cap) / count if count > 0 else 0
                                 consumed = min(total_available, needed) if needed != float('inf') else total_available
                                 ratio = consumed / total_available if total_available > 0 else 0
-                                for s in src_ids:
-                                    avail = _src_avail(s)
+                                for s, oc in expanded_src:
+                                    avail = _src_avail(s, oc)
                                     if avail > 0:
                                         consumed_from_s = avail * ratio
-                                        if card_filters.get(s):
+                                        if card_filters.get(oc):
                                             for cid, ev in source_card_events[s].items():
-                                                if cid in card_filters[s] and ev > 0:
+                                                if cid in card_filters[oc] and ev > 0:
                                                     portion = ev / avail * consumed_from_s if avail > 0 else 0
                                                     source_card_events[s][cid] -= portion
                                             source_events[s] = sum(source_card_events[s].values())
@@ -369,21 +402,21 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                                     limiter_draws += produced
 
                             elif logic == 'AND':
-                                avail = [_src_avail(s) for s in src_ids]
+                                avail = [_src_avail(s, oc) for s, oc in expanded_src]
                                 if any(a <= 0 for a in avail):
                                     continue
                                 per_source = min(avail)
                                 needed = float('inf')
                                 if cap > 0:
                                     needed = max(0, cap) / count if count > 0 else 0
-                                consumed_total = min(per_source * len(src_ids), needed) if needed != float('inf') else per_source * len(src_ids)
-                                per_source_actual = consumed_total / len(src_ids)
-                                for s in src_ids:
-                                    avail_s = _src_avail(s)
+                                consumed_total = min(per_source * len(avail), needed) if needed != float('inf') else per_source * len(avail)
+                                per_source_actual = consumed_total / len(avail)
+                                for s, oc in expanded_src:
+                                    avail_s = _src_avail(s, oc)
                                     if avail_s > 0:
-                                        if card_filters.get(s):
+                                        if card_filters.get(oc):
                                             for cid, ev in source_card_events[s].items():
-                                                if cid in card_filters[s] and ev > 0:
+                                                if cid in card_filters[oc] and ev > 0:
                                                     portion = ev / avail_s * per_source_actual if avail_s > 0 else 0
                                                     source_card_events[s][cid] -= portion
                                             source_events[s] = sum(source_card_events[s].values())

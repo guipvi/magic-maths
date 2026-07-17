@@ -294,9 +294,13 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
             pool = np.zeros(n_cats)
             # Track which categories are targets of limiters to avoid double counting base events
             limiter_targets = set()
+            limiter_source_indices = set()
             if limiters:
                 for lim in limiters:
                     limiter_targets.add(cat_index[lim['target_category_id']])
+                    for src_id in lim.get('source_category_ids', []):
+                        if src_id in cat_index:
+                            limiter_source_indices.add(cat_index[src_id])
 
             for i in range(n_cats):
                 # If a category is a target of a limiter, its events are produced by the limiter,
@@ -306,7 +310,9 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                     continue
 
                 raw = n_drawn * effective_weight[i] / deck_size if deck_size > 0 else 0.0
-                if max_per_turn_by_cat[i] > 0:
+                # Source categories of limiters should not be capped by max_per_turn;
+                # the limiter's own cap mechanism controls the output.
+                if i not in limiter_source_indices and max_per_turn_by_cat[i] > 0:
                     pool[i] = min(raw, max_per_turn_by_cat[i])
                 else:
                     pool[i] = raw
