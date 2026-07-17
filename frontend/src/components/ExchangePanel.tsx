@@ -366,9 +366,13 @@ function TradeCard({ trade, allCategories, deckCards, catLabel, expanded, onTogg
   const [assignLimitOnlySubsequent, setAssignLimitOnlySubsequent] = useState(pa?.limit_only_subsequent ?? false)
   const [assignTutoredCard, setAssignTutoredCard] = useState(pa?.tutored_card_id ?? '')
 
+  const [triggerSourceCategory, setTriggerSourceCategory] = useState<number | ''>('')
+  const [triggerSourceCard, setTriggerSourceCard] = useState<number | ''>('')
   const [triggerTarget, setTriggerTarget] = useState<number | ''>('')
   const [triggerCount, setTriggerCount] = useState(1)
   const [triggerPerTurn, setTriggerPerTurn] = useState<(number | null)[]>(pt?.[0]?.per_turn || Array(10).fill(null))
+  const [triggerSameTurn, setTriggerSameTurn] = useState(false)
+  const [triggerIsPermanent, setTriggerIsPermanent] = useState(true)
   const [triggers, setTriggers] = useState<any[]>(pt || [])
 
   useEffect(() => {
@@ -404,6 +408,10 @@ function TradeCard({ trade, allCategories, deckCards, catLabel, expanded, onTogg
   const isRamp = selectedCat?.config?.type === 'ramp'
   const isTutor = selectedCat?.config?.type === 'tutor'
 
+  const triggerSourceCat = allCategories.find(c => c.id === triggerSourceCategory)
+  const triggerTargetCat = allCategories.find(c => c.id === triggerTarget)
+  const isTriggerTargetRamp = triggerTargetCat?.config?.type === 'ramp'
+
   const handleSave = () => {
     const pa = assignCategory !== '' ? {
       category_id: Number(assignCategory),
@@ -421,16 +429,24 @@ function TradeCard({ trade, allCategories, deckCards, catLabel, expanded, onTogg
   }
 
   const addTrigger = () => {
-    if (triggerTarget === '') return
+    if (triggerSourceCategory === '' || triggerTarget === '') return
     const newTrigger = {
+      source_category_id: Number(triggerSourceCategory),
+      source_card_id: triggerSourceCard !== '' ? Number(triggerSourceCard) : null,
       target_category_id: Number(triggerTarget),
       trigger_count: triggerCount,
       per_turn: triggerPerTurn.some(v => v !== null) ? triggerPerTurn : null,
+      is_permanent: isTriggerTargetRamp ? triggerIsPermanent : null,
+      same_turn: isTriggerTargetRamp ? triggerSameTurn : null,
     }
     setTriggers([...triggers, newTrigger])
+    setTriggerSourceCategory('')
+    setTriggerSourceCard('')
     setTriggerTarget('')
     setTriggerCount(1)
     setTriggerPerTurn(Array(10).fill(null))
+    setTriggerSameTurn(false)
+    setTriggerIsPermanent(true)
   }
 
   const removeTrigger = (idx: number) => {
@@ -605,6 +621,27 @@ function TradeCard({ trade, allCategories, deckCards, catLabel, expanded, onTogg
             </h4>
             <div className="flex gap-2 items-end flex-wrap">
               <select
+                value={triggerSourceCategory}
+                onChange={(e) => setTriggerSourceCategory(e.target.value === '' ? '' : Number(e.target.value))}
+                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="">Categoria fonte...</option>
+                {allCategories.map(cat => (
+                  <option key={cat.id} value={cat.id}>{catLabel(cat)}</option>
+                ))}
+              </select>
+              <select
+                value={triggerSourceCard}
+                onChange={(e) => setTriggerSourceCard(e.target.value === '' ? '' : Number(e.target.value))}
+                className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none"
+              >
+                <option value="">Sem condição</option>
+                {deckCards.filter((c: any) => !c.is_sideboard).map((c: any) => (
+                  <option key={c.card_id} value={c.card_id}>{c.card?.name}</option>
+                ))}
+              </select>
+              <span className="text-magic-muted text-sm">→</span>
+              <select
                 value={triggerTarget}
                 onChange={(e) => setTriggerTarget(e.target.value === '' ? '' : Number(e.target.value))}
                 className="bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none"
@@ -622,7 +659,7 @@ function TradeCard({ trade, allCategories, deckCards, catLabel, expanded, onTogg
                 placeholder="Eventos"
                 className="w-20 bg-slate-700 border border-slate-600 rounded-lg px-3 py-1.5 text-sm text-white focus:ring-2 focus:ring-indigo-500 outline-none"
               />
-              <button onClick={addTrigger} disabled={triggerTarget === ''} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 transition-colors">
+              <button onClick={addTrigger} disabled={triggerSourceCategory === '' || triggerTarget === ''} className="bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm flex items-center gap-1 transition-colors">
                 <Plus className="w-3 h-3" /> Trigger
               </button>
             </div>
@@ -651,15 +688,51 @@ function TradeCard({ trade, allCategories, deckCards, catLabel, expanded, onTogg
               </div>
             </details>
 
+            {isTriggerTargetRamp && (
+              <div className="flex gap-3 flex-wrap items-center">
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={triggerSameTurn} onChange={(e) => setTriggerSameTurn(e.target.checked)} />
+                  Mesmo turno
+                </label>
+                <label className="flex items-center gap-2 text-xs">
+                  <input type="checkbox" checked={triggerIsPermanent} onChange={(e) => setTriggerIsPermanent(e.target.checked)} />
+                  Permanente
+                </label>
+                {!triggerIsPermanent && <span className="text-xs text-amber-400">Ritual</span>}
+              </div>
+            )}
+
             {triggers.length > 0 && (
               <div className="space-y-1">
                 {triggers.map((t, idx) => {
+                  const srcCat = allCategories.find(c => c.id === t.source_category_id)
                   const tgtCat = allCategories.find(c => c.id === t.target_category_id)
+                  const isTgtRamp = tgtCat?.config?.type === 'ramp'
+                  const condCard = t.source_card_id ? deckCards.find((c: any) => c.card_id === t.source_card_id) : null
                   return (
-                    <div key={idx} className="flex items-center gap-2 text-xs bg-slate-700/50 rounded px-2 py-1">
+                    <div key={idx} className="flex items-center gap-2 text-xs bg-slate-700/50 rounded px-2 py-1 flex-wrap">
+                      <span className="text-magic-muted">Quando</span>
+                      <span className="text-indigo-300">{catLabel(srcCat || { parent_id: null, name: '?' })}</span>
+                      {condCard && (
+                        <>
+                          <span className="text-magic-muted">e</span>
+                          <span className="text-blue-300">{condCard.card?.name}</span>
+                          <span className="text-magic-muted">em campo</span>
+                        </>
+                      )}
+                      <span className="text-magic-muted">→ {t.trigger_count}x →</span>
                       <span className="text-green-300">{catLabel(tgtCat || { parent_id: null, name: '?' })}</span>
-                      <span className="text-magic-muted">{t.trigger_count}x</span>
                       {t.per_turn && <span className="text-amber-400">por turno</span>}
+                      {isTgtRamp && t.same_turn !== null && t.same_turn !== undefined && (
+                        <span className="text-[10px] px-1 py-0.5 rounded bg-slate-600 text-magic-muted">
+                          {t.same_turn ? 'mesmo turno' : 'próximo turno'}
+                        </span>
+                      )}
+                      {isTgtRamp && t.is_permanent !== null && t.is_permanent !== undefined && (
+                        <span className={`text-[10px] px-1 py-0.5 rounded ${t.is_permanent ? 'bg-slate-600 text-magic-muted' : 'bg-amber-900 text-amber-200'}`}>
+                          {t.is_permanent ? 'Perm' : 'Ritual'}
+                        </span>
+                      )}
                       <button onClick={() => removeTrigger(idx)} className="text-magic-muted hover:text-red-400 ml-auto">
                         <X className="w-3 h-3" />
                       </button>

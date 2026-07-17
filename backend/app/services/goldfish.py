@@ -58,23 +58,31 @@ def _build_category_map(assignments, categories):
 
 
 def _build_card_trigger_map(card_triggers):
-    """Build lookup map for card triggers.
+    """Build lookup map for card triggers, indexed by source category.
 
     Returns:
-        card_trigger_map: {card_id: [(target_cat_id, trigger_count, per_turn)]}
+        trigger_list: list of dicts with source_category_id, source_card_id,
+                      target_category_id, trigger_count, per_turn, same_turn
     """
-    card_trigger_map = defaultdict(list)
-
+    triggers = []
     if card_triggers:
         for ct in card_triggers:
-            card_id = ct.get('source_card_id')
+            src_cat = ct.get('source_category_id')
             tgt = ct.get('target_category_id')
             count = ct.get('trigger_count', 1)
             per_turn = ct.get('per_turn')
-            if card_id and tgt:
-                card_trigger_map[card_id].append((tgt, count, per_turn))
-
-    return dict(card_trigger_map)
+            same_turn = ct.get('same_turn')
+            source_card_id = ct.get('source_card_id')
+            if src_cat is not None and tgt is not None:
+                triggers.append({
+                    'source_category_id': src_cat,
+                    'source_card_id': source_card_id,
+                    'target_category_id': tgt,
+                    'trigger_count': count,
+                    'per_turn': per_turn,
+                    'same_turn': same_turn,
+                })
+    return triggers
 
 
 def _build_wait_for_map(assignments, categories, contained_by_map=None):
@@ -133,7 +141,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
     nonland = [c for c in classified if not _is_land(c)]
 
     cat_map = _build_category_map(assignments, categories)
-    card_trigger_map = _build_card_trigger_map(card_triggers)
+    trigger_list = _build_card_trigger_map(card_triggers)
 
     # Build contained_by_map for reverse containment lookup
     contained_by_map = {}
@@ -298,20 +306,56 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
             # Add cast cards to battlefield first
             battlefield.update(cast_this_turn_ids)
 
-            if cast_this_turn_ids and (card_trigger_map or limiter_map):
+            if cast_this_turn_ids and (trigger_list or limiter_map):
                 trigger_draws = 0
+                trigger_ramp_same_turn = 0
+                trigger_ramp_deferred = 0
 
+                # Build source events per category from cast cards + battlefield permanents
+                source_events = defaultdict(float)
                 for card_id in cast_this_turn_ids:
-                    if not _check_wait_for(card_id, battlefield, wait_for_map, card_to_categories):
+                    for cat_id in card_to_categories.get(card_id, set()):
+                        source_events[cat_id] += card_multiplier.get((card_id, cat_id), 1.0)
+                        pid = parent_map.get(cat_id)
+                        while pid is not None:
+                            source_events[pid] += card_multiplier.get((card_id, cat_id), 1.0)
+                            pid = parent_map.get(pid)
+                for bf_card_id in battlefield:
+                    if bf_card_id not in cast_this_turn_ids:
+                        for cat_id in card_to_categories.get(bf_card_id, set()):
+                            source_events[cat_id] += card_multiplier.get((bf_card_id, cat_id), 1.0)
+                            pid = parent_map.get(cat_id)
+                            while pid is not None:
+                                source_events[pid] += card_multiplier.get((bf_card_id, cat_id), 1.0)
+                                pid = parent_map.get(pid)
+
+                for trig in trigger_list:
+                    src_cat_id = trig['source_category_id']
+                    src_events = source_events.get(src_cat_id, 0)
+                    if src_events <= 0:
                         continue
-                    for tgt_cat_id, count, per_turn in card_trigger_map.get(card_id, []):
+                    # Check condition: source_card must be on battlefield
+                    source_card_id = trig.get('source_card_id')
+                    if source_card_id and source_card_id not in battlefield:
+                        continue
+                    count = trig['trigger_count']
+                    per_turn = trig['per_turn']
+                    if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
+                        actual_count = per_turn[turn - 1]
+                        if actual_count == -1:
+                            actual_count = count
+                    else:
                         actual_count = count
-                        if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
-                            actual_count = per_turn[turn - 1]
-                            if actual_count == -1:
-                                actual_count = count
-                        if cat_type_by_id.get(tgt_cat_id) == 'draw':
-                            trigger_draws += actual_count
+                    produced = src_events * actual_count
+                    tgt_cat_id = trig['target_category_id']
+                    tgt_type = cat_type_by_id.get(tgt_cat_id)
+                    if tgt_type == 'draw':
+                        trigger_draws += produced
+                    elif tgt_type == 'ramp':
+                        if trig.get('same_turn') is False:
+                            trigger_ramp_deferred += produced
+                        else:
+                            trigger_ramp_same_turn += produced
 
                 # Process event limiters (multi-source AND/OR)
                 if limiter_map:
@@ -442,6 +486,10 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
                     if library:
                         drawn = library.pop(0)
                         hand.append(drawn)
+
+                # Apply ramp trigger mana
+                extra_mana += trigger_ramp_same_turn + trigger_ramp_deferred
+                mana_available += trigger_ramp_same_turn
 
             cards_in_hand_by_turn.append(len(hand))
             max_mana_by_turn.append(lands_played + extra_mana)

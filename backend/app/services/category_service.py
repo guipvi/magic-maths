@@ -113,6 +113,65 @@ def _migrate_add_assignment_limit():
         db.session.commit()
 
 
+def _migrate_add_trigger_ramp_fields():
+    """Add is_permanent and same_turn columns to deck_card_triggers if missing."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(db.engine)
+    if 'deck_card_triggers' not in inspector.get_table_names():
+        return
+    columns = {col['name'] for col in inspector.get_columns('deck_card_triggers')}
+    if 'is_permanent' not in columns:
+        db.session.execute(text(
+            'ALTER TABLE deck_card_triggers '
+            'ADD COLUMN is_permanent BOOLEAN'
+        ))
+        db.session.commit()
+    if 'same_turn' not in columns:
+        db.session.execute(text(
+            'ALTER TABLE deck_card_triggers '
+            'ADD COLUMN same_turn BOOLEAN'
+        ))
+        db.session.commit()
+
+
+def _migrate_trigger_source_to_category():
+    """Migrate DeckCardTrigger from source_assignment_id to source_category_id + source_card_id."""
+    from sqlalchemy import text, inspect as sa_inspect
+    inspector = sa_inspect(db.engine)
+    if 'deck_card_triggers' not in inspector.get_table_names():
+        return
+    columns = {col['name'] for col in inspector.get_columns('deck_card_triggers')}
+
+    if 'source_assignment_id' in columns:
+        if 'source_category_id' not in columns:
+            db.session.execute(text(
+                'ALTER TABLE deck_card_triggers '
+                'ADD COLUMN source_category_id INTEGER'
+            ))
+        if 'source_card_id' not in columns:
+            db.session.execute(text(
+                'ALTER TABLE deck_card_triggers '
+                'ADD COLUMN source_card_id INTEGER'
+            ))
+
+        db.session.execute(text(
+            'UPDATE deck_card_triggers '
+            'SET source_category_id = '
+            '  (SELECT a.category_id FROM deck_card_categories a '
+            '   WHERE a.id = deck_card_triggers.source_assignment_id), '
+            '    source_card_id = '
+            '  (SELECT a.card_id FROM deck_card_categories a '
+            '   WHERE a.id = deck_card_triggers.source_assignment_id) '
+            'WHERE source_category_id IS NULL OR source_category_id = 0'
+        ))
+        db.session.commit()
+
+        db.session.execute(text(
+            'ALTER TABLE deck_card_triggers DROP COLUMN source_assignment_id'
+        ))
+        db.session.commit()
+
+
 def seed_default_categories():
     # Migration: clear parent_id and is_default from old "interaction" parent
     old_interaction = Category.query.filter_by(name='interaction', is_default=True).first()
@@ -165,6 +224,8 @@ def seed_default_categories():
     _migrate_triggers_to_limiters()
     _migrate_add_card_ids_filter()
     _migrate_add_assignment_limit()
+    _migrate_add_trigger_ramp_fields()
+    _migrate_trigger_source_to_category()
 
 
 def _migrate_triggers_to_limiters():
@@ -369,23 +430,30 @@ def get_deck_card_triggers(deck_id):
             .all())
 
 
-def set_card_trigger(deck_id, source_assignment_id, target_category_id,
-                     trigger_count=1, per_turn=None):
+def set_card_trigger(deck_id, source_category_id, target_category_id,
+                     source_card_id=None, trigger_count=1, per_turn=None,
+                     is_permanent=None, same_turn=None):
     existing = (DeckCardTrigger.query
                 .filter_by(deck_id=deck_id,
-                           source_assignment_id=source_assignment_id,
+                           source_category_id=source_category_id,
+                           source_card_id=source_card_id,
                            target_category_id=target_category_id)
                 .first())
     if existing:
         existing.trigger_count = trigger_count
         existing.per_turn = per_turn
+        existing.is_permanent = is_permanent
+        existing.same_turn = same_turn
     else:
         trig = DeckCardTrigger(
             deck_id=deck_id,
-            source_assignment_id=source_assignment_id,
+            source_category_id=source_category_id,
+            source_card_id=source_card_id,
             target_category_id=target_category_id,
             trigger_count=trigger_count,
             per_turn=per_turn,
+            is_permanent=is_permanent,
+            same_turn=same_turn,
         )
         db.session.add(trig)
     db.session.commit()
