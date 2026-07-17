@@ -1,19 +1,31 @@
 services:
 
+  db:
+    image: postgres:17-alpine
+    container_name: magic-maths-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: magicmaths
+      POSTGRES_PASSWORD: d03d433ef5b95c677742dc358455e4c4
+      POSTGRES_DB: magicmaths
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - magic-net
+
   backend:
     build:
       context: ./backend
     container_name: magic-maths-api
     restart: unless-stopped
-    env_file:
-      - ./backend/.env
+    depends_on:
+      - db
     environment:
-      - DATABASE_URL=sqlite:////app/data/magicmaths.db
+      - DATABASE_URL=postgresql://magicmaths:d03d433ef5b95c677742dc358455e4c4@db:5432/magicmaths
+      - SECRET_KEY=5d90c1b5be8c0594cf3fb754d06229037a599afd8c9b84231d52e92c14b0e896
+      - JWT_SECRET_KEY=476ed638a5cd93253344d69dbec8c2fb6027ed5f471a419c9aa651df9c3e0f3d
+      - FLASK_APP=run.py
       - FLASK_ENV=production
-    volumes:
-      - magic-maths-data:/app/data
-    ports:
-      - "5555:5555"
     networks:
       - magic-net
 
@@ -22,30 +34,13 @@ services:
       context: ./frontend
     container_name: magic-maths-web
     restart: unless-stopped
-    ports:
-      - "80:80"
     depends_on:
       - backend
     networks:
       - magic-net
 
-  # Opcional: PostgreSQL para produção
-  # db:
-  #   image: postgres:17-alpine
-  #   container_name: magic-maths-db
-  #   restart: unless-stopped
-  #   environment:
-  #     POSTGRES_USER: magicmaths
-  #     POSTGRES_PASSWORD: changeme
-  #     POSTGRES_DB: magicmaths
-  #   volumes:
-  #     - pgdata:/var/lib/postgresql/data
-  #   networks:
-  #     - magic-net
-
 volumes:
-  magic-maths-data:
-  # pgdata:
+  pgdata:
 
 networks:
   magic-net:

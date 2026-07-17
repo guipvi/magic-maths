@@ -9,3 +9,4 @@ python-dotenv>=1.0
 gunicorn>=22.0
 numpy>=2.0
 scipy>=1.14
+psycopg2-binary>=2.9
