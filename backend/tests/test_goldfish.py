@@ -141,3 +141,123 @@ def test_parent_rollup_with_multiplier():
                                limiters=limiters, max_speed=True)
     # Should complete and produce meaningful results
     assert result['avg_empty_hand_turn'] > 0
+
+
+def test_containment_rollup_source_events_for_limiter():
+    """Events from a contained category roll up to container via containment for limiters.
+
+    Treasure (contained in auto via user-defined containment) should contribute
+    events to auto's source_events, which the limiter consumes from.
+    """
+    categories = [
+        {'id': 1, 'name': 'sac_outlet', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'auto', 'color': '#f87171', 'config': {}, 'parent_id': 1},
+        {'id': 3, 'name': 'tesouro', 'color': '#f59e0b', 'config': {}},
+        {'id': 4, 'name': 'draw', 'color': '#3b82f6', 'config': {'type': 'draw'}},
+    ]
+    # Brass Bounty in tesouro with high multiplier
+    assignments = [
+        {'card_id': 1, 'category_id': 3, 'multiplier': 80.0},
+        {'card_id': 2, 'category_id': 4, 'multiplier': 1.0,
+         'limit_category_id': 1},
+    ]
+    # tesouro is contained in auto (user-defined containment, 1/n subcategoria)
+    containment_map = {2: {3}}
+    direct_children_of = {2: {3}}
+    limiters = [
+        {'target_category_id': 4, 'logic': 'OR', 'source_category_ids': [1],
+         'trigger_count': 1, 'accumulate': False},
+    ]
+
+    deck = [_make_card(1, 'Brass Bounty', 7, 'Sorcery'),
+            _make_card(2, 'Korvold', 4, 'Legendary Creature'),
+            *[_make_card(100 + i, 'Land', 0, 'Basic Land — Forest') for i in range(38)]]
+
+    result = simulate_goldfish(
+        deck, deck_size=40, simulations=100,
+        assignments=assignments, categories=categories,
+        limiters=limiters, containment_map=containment_map,
+        direct_children_of=direct_children_of, max_speed=True)
+
+    # Without containment, tesouro events wouldn't reach sac_outlet at all
+    # (no parent_id), so limiter would produce 0 draws
+    # With containment, tesouro rolls up to auto -> sac_outlet -> limiter consumes
+    assert result['avg_empty_hand_turn'] > 0
+
+
+def test_containment_rollup_source_events_for_trigger():
+    """Events from a contained category roll up to container via containment for triggers.
+
+    Card trigger source=sac_outlet should see events from tesouro (contained
+    in auto, which is a child of sac_outlet).
+    """
+    categories = [
+        {'id': 1, 'name': 'sac_outlet', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'auto', 'color': '#f87171', 'config': {}, 'parent_id': 1},
+        {'id': 3, 'name': 'tesouro', 'color': '#f59e0b', 'config': {}},
+        {'id': 4, 'name': 'draw', 'color': '#3b82f6', 'config': {'type': 'draw'}},
+    ]
+    assignments = [
+        {'card_id': 1, 'category_id': 3, 'multiplier': 80.0},
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0},
+    ]
+    containment_map = {2: {3}}
+    direct_children_of = {2: {3}}
+    card_triggers = [
+        {'source_category_id': 1, 'source_card_id': 2,
+         'target_category_id': 4, 'trigger_count': 1},
+    ]
+
+    deck = [_make_card(1, 'Brass Bounty', 7, 'Sorcery'),
+            _make_card(2, 'Korvold', 4, 'Legendary Creature'),
+            *[_make_card(100 + i, 'Land', 0, 'Basic Land — Forest') for i in range(38)]]
+
+    result = simulate_goldfish(
+        deck, deck_size=40, simulations=100,
+        assignments=assignments, categories=categories,
+        card_triggers=card_triggers, containment_map=containment_map,
+        direct_children_of=direct_children_of, max_speed=True)
+
+    # Containment rollup should make tesouro events visible to sac_outlet
+    assert result['avg_empty_hand_turn'] > 0
+
+
+def test_trigger_containment_expansion():
+    """Card trigger with source=sac_outlet expands to contained categories.
+
+    When sac_outlet contains tesouro via containment, a trigger with
+    source_category_id=sac_outlet should also fire on events from tesouro.
+    """
+    categories = [
+        {'id': 1, 'name': 'sac_outlet', 'color': '#ef4444', 'config': {}},
+        {'id': 2, 'name': 'tesouro', 'color': '#f59e0b', 'config': {}},
+        {'id': 3, 'name': 'draw', 'color': '#3b82f6', 'config': {'type': 'draw'}},
+    ]
+    # Korvold in sac_outlet, Brass Bounty in tesouro
+    assignments = [
+        {'card_id': 2, 'category_id': 1, 'multiplier': 1.0},
+        {'card_id': 1, 'category_id': 2, 'multiplier': 5.0},
+    ]
+    # sac_outlet contains tesouro
+    containment_map = {1: {2}}
+    direct_children_of = {1: {2}}
+    # Trigger: when sac_outlet fires and Korvold on battlefield -> draw
+    card_triggers = [
+        {'source_category_id': 1, 'source_card_id': 2,
+         'target_category_id': 3, 'trigger_count': 1},
+    ]
+
+    deck = [_make_card(1, 'Brass Bounty', 7, 'Sorcery'),
+            _make_card(2, 'Korvold', 4, 'Legendary Creature'),
+            *[_make_card(100 + i, 'Land', 0, 'Basic Land — Forest') for i in range(38)]]
+
+    result = simulate_goldfish(
+        deck, deck_size=40, simulations=100,
+        assignments=assignments, categories=categories,
+        card_triggers=card_triggers, containment_map=containment_map,
+        direct_children_of=direct_children_of, max_speed=True)
+
+    # Without containment expansion, source_events['sac_outlet'] would only
+    # have Korvold's events (mult=1), not Brass Bounty's (mult=5)
+    # With expansion, the trigger also sees tesouro events
+    assert result['avg_empty_hand_turn'] > 0
