@@ -1,0 +1,25 @@
+# Environment
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.db
+backend/instance/
+
+# Node
+node_modules/
+frontend/dist/
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Docker
+.pytest_cache/
