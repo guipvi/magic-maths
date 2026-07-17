@@ -728,10 +728,24 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
   categories: any[]; assignments: any[]; cardTriggers: any[];
   limiters: any[]; deckId: string; onRefresh: () => void
 }) {
-  const [sourceAssignment, setSourceAssignment] = useState<number | ''>('')
+  const [sourceCategory, setSourceCategory] = useState<number | ''>('')
+  const [sourceCard, setSourceCard] = useState<number | ''>('')
   const [targetCategory, setTargetCategory] = useState<number | ''>('')
   const [triggerCount, setTriggerCount] = useState(1)
   const [perTurn, setPerTurn] = useState<(number | null)[] | null>(null)
+  const [triggerSameTurn, setTriggerSameTurn] = useState(false)
+  const [triggerIsPermanent, setTriggerIsPermanent] = useState(true)
+
+  const targetCat = categories.find(c => c.id === targetCategory)
+  const isTargetRamp = targetCat?.config?.type === 'ramp'
+
+  const uniqueCards = useMemo(() => {
+    const seen = new Map<number, { card_id: number; card_name: string }>()
+    for (const a of assignments) {
+      if (!seen.has(a.card_id)) seen.set(a.card_id, { card_id: a.card_id, card_name: a.card_name })
+    }
+    return Array.from(seen.values()).sort((a, b) => a.card_name.localeCompare(b.card_name))
+  }, [assignments])
 
   const [limTarget, setLimTarget] = useState<number | ''>('')
   const [limLogic, setLimLogic] = useState<'OR' | 'AND'>('OR')
@@ -740,18 +754,24 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
   const [limAccumulate, setLimAccumulate] = useState(false)
 
   const handleCreateCardTrigger = async () => {
-    if (sourceAssignment === '' || targetCategory === '') return
+    if (sourceCategory === '' || targetCategory === '') return
     await api.setCardTrigger(deckId, {
-      source_assignment_id: Number(sourceAssignment),
+      source_category_id: Number(sourceCategory),
+      source_card_id: sourceCard !== '' ? Number(sourceCard) : undefined,
       target_category_id: Number(targetCategory),
       trigger_count: triggerCount,
       per_turn: perTurn?.some(v => v !== null) ? perTurn : null,
+      is_permanent: isTargetRamp ? triggerIsPermanent : null,
+      same_turn: isTargetRamp ? triggerSameTurn : null,
     })
     onRefresh()
-    setSourceAssignment('')
+    setSourceCategory('')
+    setSourceCard('')
     setTargetCategory('')
     setTriggerCount(1)
     setPerTurn(null)
+    setTriggerSameTurn(false)
+    setTriggerIsPermanent(true)
   }
 
   const handleRemoveCardTrigger = async (id: number) => {
@@ -794,20 +814,28 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
     <div className="space-y-6">
       {/* Card-level triggers */}
       <div className="card">
-        <h3 className="font-semibold mb-4">Triggers por Carta</h3>
+        <h3 className="font-semibold mb-4">Triggers por Evento</h3>
         <p className="text-xs text-magic-muted mb-4">
-          Quando uma carta específica (na categoria X) é jogada, ela gera N eventos de outra categoria.
+          Sempre que eventos acontecem na categoria fonte, e (opcionalmente) a carta condição está em campo, produzir N eventos na categoria alvo.
         </p>
         <div className="flex gap-3 mb-4 flex-wrap items-end">
           <div className="flex-1 min-w-[200px]">
-            <label className="text-xs text-magic-muted">Fonte (carta + categoria)</label>
-            <select value={sourceAssignment} onChange={e => setSourceAssignment(Number(e.target.value))}
+            <label className="text-xs text-magic-muted">Categoria fonte</label>
+            <select value={sourceCategory} onChange={e => setSourceCategory(Number(e.target.value))}
               className="input w-full mt-1">
               <option value="">Selecionar...</option>
-              {assignments.map(a => (
-                <option key={a.id} value={a.id}>
-                  {a.card_name} — {catLabel(categories.find(c => c.id === a.category_id) || a, categories)}
-                </option>
+              {categories.map(cat => (
+                <option key={cat.id} value={cat.id}>{catLabel(cat, categories)}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1 min-w-[200px]">
+            <label className="text-xs text-magic-muted">Carta condição (opcional)</label>
+            <select value={sourceCard} onChange={e => setSourceCard(Number(e.target.value))}
+              className="input w-full mt-1">
+              <option value="">Sem condição (sempre ativo)</option>
+              {uniqueCards.map(c => (
+                <option key={c.card_id} value={c.card_id}>{c.card_name}</option>
               ))}
             </select>
           </div>
@@ -835,18 +863,51 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
 
         <PerTurnEditor value={perTurn} onChange={setPerTurn} />
 
+        {isTargetRamp && (
+          <div className="flex gap-3 mt-3 flex-wrap items-center">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={triggerSameTurn} onChange={e => setTriggerSameTurn(e.target.checked)} />
+              Mesmo turno
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={triggerIsPermanent} onChange={e => setTriggerIsPermanent(e.target.checked)} />
+              Permanente
+            </label>
+            {!triggerIsPermanent && <span className="text-xs text-amber-400">Ritual</span>}
+          </div>
+        )}
+
         <div className="space-y-2 mt-4">
           {cardTriggers.map(ct => {
+            const srcCat = categories.find(c => c.id === ct.source_category_id)
             const tgtCat = categories.find(c => c.id === ct.target_category_id)
             const hasPerTurn = ct.per_turn && ct.per_turn.some((v: number | null) => v !== null)
+            const isTgtRamp = tgtCat?.config?.type === 'ramp'
             return (
               <div key={ct.id} className="flex items-center justify-between px-3 py-2 bg-slate-800 rounded-lg">
-                <div className="flex items-center gap-3 text-sm">
-                  <span className="font-medium text-indigo-300">{ct.card_name}</span>
-                  <span className="text-xs text-magic-muted">({catLabel(categories.find(c => c.id === ct.source_category_id) || {parent_id: null, name: ct.source_category_name}, categories)})</span>
+                <div className="flex items-center gap-2 text-sm flex-wrap">
+                  <span className="text-xs text-magic-muted">Quando</span>
+                  <span className="font-medium text-indigo-300">{catLabel(srcCat || {parent_id: null, name: ct.source_category_name}, categories)}</span>
+                  {ct.source_card_name && (
+                    <>
+                      <span className="text-xs text-magic-muted">e</span>
+                      <span className="font-medium text-blue-300">{ct.source_card_name}</span>
+                      <span className="text-xs text-magic-muted">em campo</span>
+                    </>
+                  )}
                   <span className="text-magic-muted">→ {ct.trigger_count}x →</span>
                   <span className="font-medium text-green-300">{catLabel(tgtCat || {parent_id: null, name: ct.target_category_name}, categories)}</span>
                   {hasPerTurn && <span className="text-[10px] text-amber-400">por turno</span>}
+                  {isTgtRamp && ct.same_turn !== null && ct.same_turn !== undefined && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-700 text-magic-muted">
+                      {ct.same_turn ? 'mesmo turno' : 'próximo turno'}
+                    </span>
+                  )}
+                  {isTgtRamp && ct.is_permanent !== null && ct.is_permanent !== undefined && (
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${ct.is_permanent ? 'bg-slate-700 text-magic-muted' : 'bg-amber-900 text-amber-200'}`}>
+                      {ct.is_permanent ? 'Perm' : 'Ritual'}
+                    </span>
+                  )}
                 </div>
                 <button onClick={() => handleRemoveCardTrigger(ct.id)}
                   className="text-red-400 hover:text-red-300">
@@ -856,7 +917,7 @@ function TriggerManager({ categories, assignments, cardTriggers, limiters, deckI
             )
           })}
           {cardTriggers.length === 0 && (
-            <p className="text-sm text-magic-muted text-center py-4">Nenhum trigger por carta.</p>
+            <p className="text-sm text-magic-muted text-center py-4">Nenhum trigger configurado.</p>
           )}
         </div>
       </div>

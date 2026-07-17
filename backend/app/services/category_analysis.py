@@ -332,13 +332,15 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                     p_gate = 1.0 - p_none_product
                     pool[i] *= p_gate
 
-            # 2b. Card-trigger base events (per-card triggers with per_turn support)
+            # 2b. Card-trigger events (category-based: source category events * trigger_count * P(condition card in play))
             card_trigger_base = np.zeros(n_cats)
+            card_trigger_deferred = np.zeros(n_cats)
             if card_triggers:
                 for ct in card_triggers:
                     src = ct.get('source_category_id')
                     tgt = ct.get('target_category_id')
-                    qty = ct.get('quantity', 1)
+                    source_card_id = ct.get('source_card_id')
+                    source_card_count = ct.get('source_card_count', 0)
                     per_turn = ct.get('per_turn')
                     if per_turn and isinstance(per_turn, list) and len(per_turn) >= turn:
                         count = per_turn[turn - 1]
@@ -347,8 +349,23 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                     else:
                         count = ct.get('trigger_count', 1)
                     if src in cat_index and tgt in cat_index:
+                        src_idx = cat_index[src]
+                        src_events = pool[src_idx]
+                        if src_events <= 0:
+                            continue
+                        if source_card_id and source_card_count > 0:
+                            p_none = _hypergeom_cdf(deck_size, source_card_count, int(n_drawn), 0)
+                            p_in_play = 1.0 - p_none
+                        else:
+                            p_in_play = 1.0
+                        effective_events = src_events * count * p_in_play
                         tgt_idx = cat_index[tgt]
-                        card_trigger_base[tgt_idx] += count * qty * n_drawn / deck_size
+                        is_ramp = cat_map.get(tgt, {}).get('config', {}).get('type') == 'ramp'
+                        same_turn = ct.get('same_turn')
+                        if is_ramp and same_turn is False:
+                            card_trigger_deferred[tgt_idx] += effective_events
+                        else:
+                            card_trigger_base[tgt_idx] += effective_events
 
             pool += card_trigger_base
 
@@ -439,8 +456,10 @@ def analyze_categories(deck_size, categories, assignments, max_turns=10,
                 break
             n_drawn = new_n_drawn
 
-        # 5. Compute surplus for next turn (only for accumulate limiters)
+        # 5. Compute surplus for next turn (only for accumulate limiters + deferred triggers)
         surplus.fill(0.0)
+        # Deferred ramp triggers (same_turn=false) carry over to next turn
+        surplus += card_trigger_deferred
         if limiters:
             for lim in limiters:
                 if not lim.get('accumulate', False):

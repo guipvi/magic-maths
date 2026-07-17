@@ -85,14 +85,16 @@ class DeckCardTrigger(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     deck_id = db.Column(db.String(36), db.ForeignKey('decks.id'), nullable=False)
-    source_assignment_id = db.Column(db.Integer, db.ForeignKey('deck_card_categories.id'),
-                                     nullable=False)
+    source_category_id = db.Column(db.Integer, db.ForeignKey('categories.id'), nullable=False)
+    source_card_id = db.Column(db.Integer, db.ForeignKey('cards.id'), nullable=True)
     target_category_id = db.Column(db.Integer, db.ForeignKey('categories.id', ondelete='CASCADE'), nullable=False)
     trigger_count = db.Column(db.Integer, default=1)
     per_turn = db.Column(db.JSON, nullable=True)
+    is_permanent = db.Column(db.Boolean, nullable=True)
+    same_turn = db.Column(db.Boolean, nullable=True)
 
-    source_assignment = db.relationship('DeckCardCategory',
-                                        foreign_keys=[source_assignment_id])
+    source_category = db.relationship('Category', foreign_keys=[source_category_id])
+    source_card = db.relationship('Card', foreign_keys=[source_card_id])
     target_category = db.relationship('Category', foreign_keys=[target_category_id])
 
     def _resolve_count(self, turn):
@@ -107,14 +109,16 @@ class DeckCardTrigger(db.Model):
         return {
             'id': self.id,
             'deck_id': self.deck_id,
-            'source_assignment_id': self.source_assignment_id,
-            'card_name': self.source_assignment.card.name if self.source_assignment else None,
-            'source_category_id': self.source_assignment.category_id if self.source_assignment else None,
-            'source_category_name': self.source_assignment.category.name if self.source_assignment else None,
+            'source_category_id': self.source_category_id,
+            'source_category_name': self.source_category.name if self.source_category else None,
+            'source_card_id': self.source_card_id,
+            'source_card_name': self.source_card.name if self.source_card else None,
             'target_category_id': self.target_category_id,
             'target_category_name': self.target_category.name if self.target_category else None,
             'trigger_count': self.trigger_count,
             'per_turn': self.per_turn,
+            'is_permanent': self.is_permanent,
+            'same_turn': self.same_turn,
         }
 
 

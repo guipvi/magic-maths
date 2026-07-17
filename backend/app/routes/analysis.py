@@ -104,18 +104,17 @@ def _load_category_data(deck_id, cards):
 
     card_triggers = []
     for ct in card_trig_raw:
-        if ct.source_assignment:
-            src_cat_id = ct.source_assignment.category_id
-            card_id = ct.source_assignment.card_id
-            qty = card_counts.get(card_id, 0)
-            card_triggers.append({
-                'source_card_id': card_id,
-                'source_category_id': src_cat_id,
-                'target_category_id': ct.target_category_id,
-                'trigger_count': ct.trigger_count,
-                'quantity': qty,
-                'per_turn': ct.per_turn,
-            })
+        card_triggers.append({
+            'source_category_id': ct.source_category_id,
+            'source_card_id': ct.source_card_id,
+            'source_card_count': card_counts.get(ct.source_card_id, 0) if ct.source_card_id else 0,
+            'target_category_id': ct.target_category_id,
+            'trigger_count': ct.trigger_count,
+            'quantity': 1,
+            'per_turn': ct.per_turn,
+            'is_permanent': ct.is_permanent,
+            'same_turn': ct.same_turn,
+        })
 
     limiters = [l.to_dict() for l in limiter_raw]
 
@@ -443,12 +442,14 @@ def what_if_analysis():
         if trade.planned_triggers:
             for pt in trade.planned_triggers:
                 card_triggers.append({
-                    'source_card_id': trade.card_in.id,
-                    'source_category_id': pa['category_id'],
+                    'source_category_id': pt['source_category_id'],
+                    'source_card_id': pt.get('source_card_id'),
                     'target_category_id': pt['target_category_id'],
                     'trigger_count': pt.get('trigger_count', 1),
-                    'quantity': trade.quantity,
+                    'quantity': 1,
                     'per_turn': pt.get('per_turn'),
+                    'is_permanent': pt.get('is_permanent'),
+                    'same_turn': pt.get('same_turn'),
                 })
 
     from concurrent.futures import ThreadPoolExecutor
@@ -558,18 +559,17 @@ def categories_analysis():
 
     card_triggers = []
     for ct in card_triggers_raw:
-        if ct.source_assignment:
-            src_cat_id = ct.source_assignment.category_id
-            card_id = ct.source_assignment.card_id
-            qty = card_counts.get(card_id, 0)
-            card_triggers.append({
-                'source_card_id': card_id,
-                'source_category_id': src_cat_id,
-                'target_category_id': ct.target_category_id,
-                'trigger_count': ct.trigger_count,
-                'quantity': qty,
-                'per_turn': ct.per_turn,
-            })
+        card_triggers.append({
+            'source_category_id': ct.source_category_id,
+            'source_card_id': ct.source_card_id,
+            'source_card_count': card_counts.get(ct.source_card_id, 0) if ct.source_card_id else 0,
+            'target_category_id': ct.target_category_id,
+            'trigger_count': ct.trigger_count,
+            'quantity': 1,
+            'per_turn': ct.per_turn,
+            'is_permanent': ct.is_permanent,
+            'same_turn': ct.same_turn,
+        })
 
     limiters = [l.to_dict() for l in limiter_raw]
 

@@ -114,8 +114,10 @@ export const categories = {
   getCardTriggers: (deckId: string) =>
     api.get(`/categories/deck/${deckId}/card-triggers`),
   setCardTrigger: (deckId: string, data: {
-    source_assignment_id: number; target_category_id: number;
+    source_category_id: number; source_card_id?: number | null;
+    target_category_id: number;
     trigger_count?: number; per_turn?: (number | null)[] | null;
+    is_permanent?: boolean | null; same_turn?: boolean | null;
   }) => api.post(`/categories/deck/${deckId}/card-triggers`, data),
   removeCardTrigger: (deckId: string, triggerId: number) =>
     api.delete(`/categories/deck/${deckId}/card-triggers/${triggerId}`),

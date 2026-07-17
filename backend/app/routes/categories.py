@@ -158,14 +158,17 @@ def add_card_trigger(deck_id):
     if not deck:
         return jsonify({'error': 'Deck not found'}), 404
     data = request.get_json()
-    if not data or not data.get('source_assignment_id') or not data.get('target_category_id'):
-        return jsonify({'error': 'source_assignment_id and target_category_id required'}), 400
+    if not data or not data.get('source_category_id') or not data.get('target_category_id'):
+        return jsonify({'error': 'source_category_id and target_category_id required'}), 400
     trig = set_card_trigger(
         deck_id=deck_id,
-        source_assignment_id=data['source_assignment_id'],
+        source_category_id=data['source_category_id'],
         target_category_id=data['target_category_id'],
+        source_card_id=data.get('source_card_id'),
         trigger_count=data.get('trigger_count', 1),
         per_turn=data.get('per_turn'),
+        is_permanent=data.get('is_permanent'),
+        same_turn=data.get('same_turn'),
     )
     return jsonify(trig.to_dict()), 201
 

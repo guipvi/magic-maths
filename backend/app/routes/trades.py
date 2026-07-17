@@ -159,7 +159,7 @@ def execute_trades(deck_id):
                 ).all()
                 for assn in existing_assignments:
                     triggers = DeckCardTrigger.query.filter_by(
-                        source_assignment_id=assn.id
+                        source_card_id=trade.card_out_id
                     ).all()
                     for t in triggers:
                         db.session.delete(t)
@@ -228,14 +228,17 @@ def execute_trades(deck_id):
                     )
                     db.session.add(wf)
 
-            if trade.planned_triggers and new_assn_id:
+            if trade.planned_triggers:
                 for pt in trade.planned_triggers:
                     trigger = DeckCardTrigger(
                         deck_id=deck_id,
-                        source_assignment_id=new_assn_id,
+                        source_category_id=pt['source_category_id'],
+                        source_card_id=pt.get('source_card_id'),
                         target_category_id=pt['target_category_id'],
                         trigger_count=pt.get('trigger_count', 1),
                         per_turn=pt.get('per_turn'),
+                        is_permanent=pt.get('is_permanent'),
+                        same_turn=pt.get('same_turn'),
                     )
                     db.session.add(trigger)
 
