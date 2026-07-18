@@ -151,11 +151,11 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
             if cat_id not in cat_min_cmc or cmc < cat_min_cmc[cat_id]:
                 cat_min_cmc[cat_id] = cmc
 
-    # Build creature vs non-creature mana weights per ramp category
-    # Creature ramp has summoning sickness (can't tap on the turn it enters)
-    # Non-creature ramp (artifacts, etc.) can tap immediately
-    ramp_creature_weight = {}
-    ramp_noncreature_weight = {}
+    # Build per-CMC mana weights for ramp categories, split by creature/non-creature
+    # Used for: (1) CMC gating - only count cards with CMC <= available mana
+    #           (2) Summoning sickness - creature ramp delayed by 1 turn
+    ramp_cr_cmc = {}    # {cat_id: {cmc: weight}} for creatures
+    ramp_ncr_cmc = {}   # {cat_id: {cmc: weight}} for non-creatures
     if assignments and deck_cards:
         card_by_id = {c.get('id'): c for c in deck_cards}
         for a in assignments:
@@ -167,13 +167,13 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
             if not card:
                 continue
             mana_amt = a.get('mana_amount') or a.get('multiplier', 1.0)
+            cmc = card_cmc.get(card_id, 0)
             is_cr = _is_creature(card)
             if a.get('same_turn') is True:
                 is_cr = False
-            if is_cr:
-                ramp_creature_weight[cat_id] = ramp_creature_weight.get(cat_id, 0) + mana_amt
-            else:
-                ramp_noncreature_weight[cat_id] = ramp_noncreature_weight.get(cat_id, 0) + mana_amt
+            target = ramp_cr_cmc if is_cr else ramp_ncr_cmc
+            target.setdefault(cat_id, {})
+            target[cat_id][cmc] = target[cat_id].get(cmc, 0) + mana_amt
 
     total_ramp = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in ramp_cats)
     total_draw = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in draw_cats)
@@ -241,15 +241,26 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
                     entry = cat_entries.get(cid, cat_entries.get(str(cid), {}))
                     total_expected = float(entry.get('total_expected', 0))
 
-                    cw = ramp_creature_weight.get(cid, 0)
-                    ncw = ramp_noncreature_weight.get(cid, 0)
-                    tw = cw + ncw
-                    if tw > 0 and cw > 0:
+                    # CMC gating: only count portion of category castable with available mana
+                    cr_w = ramp_cr_cmc.get(cid, {})
+                    ncr_w = ramp_ncr_cmc.get(cid, {})
+                    total_weight = sum(cr_w.values()) + sum(ncr_w.values())
+                    castable_cr = sum(w for cmc, w in cr_w.items() if cmc <= mana_before_ramp)
+                    castable_ncr = sum(w for cmc, w in ncr_w.items() if cmc <= mana_before_ramp)
+                    castable_total = castable_cr + castable_ncr
+
+                    if total_weight > 0:
+                        gated_expected = total_expected * (castable_total / total_weight)
+                    else:
+                        gated_expected = 0.0
+
+                    # Summoning sickness: creature portion delayed by 1 turn
+                    if castable_total > 0 and castable_cr > 0:
                         c_portion = prev_creature_expected.get(cid, 0.0)
-                        nc_portion = total_expected * (ncw / tw) if ncw > 0 else 0.0
+                        nc_portion = gated_expected * (castable_ncr / castable_total) if castable_ncr > 0 else 0.0
                         expected = c_portion + nc_portion
                     else:
-                        expected = total_expected
+                        expected = gated_expected
 
                     mana_before_ramp += expected
                     total_ramp_mana += expected
@@ -312,15 +323,20 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
             'categories': cat_breakdown,
         }
 
-        # Store creature portion of total_expected for next turn's summoning sickness delay
+        # Store creature portion for next turn's summoning sickness delay
+        # Use the current turn's CMC-gated values so next turn gets the right amount
         for cr_cid in ramp_cats:
             cr_entry = cat_entries.get(cr_cid, cat_entries.get(str(cr_cid), {}))
             cr_te = float(cr_entry.get('total_expected', 0))
-            cr_cw = ramp_creature_weight.get(cr_cid, 0)
-            cr_ncw = ramp_noncreature_weight.get(cr_cid, 0)
-            cr_tw = cr_cw + cr_ncw
-            if cr_tw > 0 and cr_cw > 0:
-                prev_creature_expected[cr_cid] = cr_te * (cr_cw / cr_tw)
+            cr_cr_w = ramp_cr_cmc.get(cr_cid, {})
+            cr_ncr_w = ramp_ncr_cmc.get(cr_cid, {})
+            cr_tw = sum(cr_cr_w.values()) + sum(cr_ncr_w.values())
+            # Use available mana at end of turn for gating
+            cr_castable_cr = sum(w for cmc, w in cr_cr_w.items() if cmc <= mana_before_ramp)
+            cr_castable_ncr = sum(w for cmc, w in cr_ncr_w.items() if cmc <= mana_before_ramp)
+            cr_castable_total = cr_castable_cr + cr_castable_ncr
+            if cr_tw > 0 and cr_castable_total > 0 and cr_castable_cr > 0:
+                prev_creature_expected[cr_cid] = cr_te * (cr_castable_total / cr_tw) * (cr_castable_cr / cr_castable_total)
             else:
                 prev_creature_expected[cr_cid] = 0.0
 
