@@ -28,6 +28,17 @@ def _is_land(card):
     return 'land' in tl_lower
 
 
+def _is_creature(card):
+    tl = card.get('type_line', '')
+    if not tl:
+        return False
+    tl_lower = tl.lower()
+    if '—' in tl:
+        main_type = tl_lower.split('—')[0].strip()
+        return 'creature' in main_type
+    return 'creature' in tl_lower
+
+
 def _build_category_map(assignments, categories):
     """Build card_id -> {type, mana_amount, name, category_id} from assignments."""
     cat_map = {}
@@ -207,7 +218,7 @@ def simulate_goldfish(deck_cards, deck_size=None, simulations=2000,
         is_ramp_arr = [0] * total_cards
         is_draw_arr = [0] * total_cards
         draw_multiplier_arr = [1] * total_cards
-        same_turn_arr = [True] * total_cards
+        same_turn_arr = [not _is_creature(classified[i]) for i in range(total_cards)]
 
         for i, c in enumerate(classified):
             cid = c.get('id')
