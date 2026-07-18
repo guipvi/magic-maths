@@ -137,7 +137,7 @@ export default function DeckAnalysis() {
         )}
         {activeTab === 'commander' && id && <CommanderConfig deckId={id} cards={cards} commanderAnalysis={data?.commander} />}
         {activeTab === 'interactions' && <InteractionBreakdown data={data?.interactions} categories={data?.categories?.categories} />}
-        {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} />}
+        {activeTab === 'lands' && data?.land_recommendation && <LandRecommender data={data.land_recommendation} cards={cards} />}
         {activeTab === 'exchanges' && id && (
           <ExchangePanel 
             deckId={id} 
