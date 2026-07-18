@@ -11,18 +11,37 @@
  * Props `data` comes from GET /api/analysis/land-recommendation or the
  * `land_recommendation` key from /api/analysis/full.
  */
+import { useState } from 'react'
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts'
 
 interface Props {
   data: any
+  cards?: any[]
 }
 
-export default function LandRecommender({ data }: Props) {
+export default function LandRecommender({ data, cards = [] }: Props) {
+  const [selectedCmc, setSelectedCmc] = useState<number | null>(null)
+
   const manaCurve = data.mana_curve || {}
   const curveData = Object.entries(manaCurve).map(([cmc, count]) => ({
-    cmc: `CMC ${cmc}`,
-    cards: count as number,
+    cmc: Number(cmc),
+    label: `CMC ${cmc}`,
+    count: count as number,
   }))
+
+  const cardsByCmc: Record<number, any[]> = {}
+  cards.forEach((entry: any) => {
+    const c = entry.card
+    if (!c || entry.is_sideboard) return
+    const cmc = Math.floor(c.cmc)
+    const qty = entry.quantity || 1
+    for (let i = 0; i < qty; i++) {
+      if (!cardsByCmc[cmc]) cardsByCmc[cmc] = []
+      cardsByCmc[cmc].push(c)
+    }
+  })
+
+  const selectedCards = selectedCmc != null ? (cardsByCmc[selectedCmc] || []) : []
 
   const profileLabels: Record<string, string> = {
     aggro: 'Aggro',
@@ -85,17 +104,58 @@ export default function LandRecommender({ data }: Props) {
       <div className="card">
         <h3 className="font-semibold mb-4">Curva de Mana Atual</h3>
         <ResponsiveContainer width="100%" height={250}>
-          <BarChart data={curveData}>
+          <BarChart data={curveData} onClick={(e) => {
+            if (e?.activePayload?.[0]) {
+              const cmc = e.activePayload[0].payload.cmc
+              setSelectedCmc(prev => prev === cmc ? null : cmc)
+            }
+          }} style={{ cursor: 'pointer' }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
-            <XAxis dataKey="cmc" stroke="#94a3b8" fontSize={12} />
+            <XAxis dataKey="label" stroke="#94a3b8" fontSize={12} />
             <YAxis stroke="#94a3b8" fontSize={12} allowDecimals={false} />
             <Tooltip
               contentStyle={{ backgroundColor: '#1e293b', border: '1px solid #334155', borderRadius: '8px' }}
               labelStyle={{ color: '#f1f5f9' }}
             />
-            <Bar dataKey="cards" name="Cards" fill="#6366f1" radius={[4, 4, 0, 0]} />
+            <Bar dataKey="count" name="Cards" radius={[4, 4, 0, 0]}
+              fill="#6366f1"
+              onClick={(_, index) => {
+                const cmc = curveData[index]?.cmc
+                if (cmc != null) setSelectedCmc(prev => prev === cmc ? null : cmc)
+              }}
+            />
           </BarChart>
         </ResponsiveContainer>
+        {selectedCmc != null && (
+          <div className="mt-4 border-t border-magic-border pt-4">
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="font-medium text-sm">
+                CMC {selectedCmc} — {selectedCards.length} {selectedCards.length === 1 ? 'carta' : 'cartas'}
+              </h4>
+              <button
+                onClick={() => setSelectedCmc(null)}
+                className="text-xs text-magic-muted hover:text-white transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+              {selectedCards.map((c: any, i: number) => (
+                <div key={`${c.id}-${i}`} className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-2">
+                  {c.image_uris?.small ? (
+                    <img src={c.image_uris.small} alt={c.name} className="w-10 h-14 rounded object-cover flex-shrink-0" />
+                  ) : (
+                    <div className="w-10 h-14 rounded bg-slate-700 flex-shrink-0" />
+                  )}
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium truncate">{c.name}</p>
+                    <p className="text-xs text-magic-muted truncate">{c.mana_cost || '—'}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {Object.keys(data.color_sources || {}).length > 0 && (
