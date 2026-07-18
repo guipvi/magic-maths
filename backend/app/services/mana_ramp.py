@@ -22,6 +22,17 @@ def _is_land(card):
     return 'land' in tl.lower()
 
 
+def _is_creature(card):
+    tl = card.get('type_line', '')
+    if not tl:
+        return False
+    tl_lower = tl.lower()
+    if '—' in tl:
+        main_type = tl_lower.split('—')[0].strip()
+        return 'creature' in main_type
+    return 'creature' in tl_lower
+
+
 def _hypergeom_prob(n_deck, n_success, n_draw, k):
     if n_deck <= 0 or n_success <= 0 or n_draw <= 0:
         return 0.0
@@ -140,6 +151,30 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
             if cat_id not in cat_min_cmc or cmc < cat_min_cmc[cat_id]:
                 cat_min_cmc[cat_id] = cmc
 
+    # Build creature vs non-creature mana weights per ramp category
+    # Creature ramp has summoning sickness (can't tap on the turn it enters)
+    # Non-creature ramp (artifacts, etc.) can tap immediately
+    ramp_creature_weight = {}
+    ramp_noncreature_weight = {}
+    if assignments and deck_cards:
+        card_by_id = {c.get('id'): c for c in deck_cards}
+        for a in assignments:
+            cat_id = a.get('category_id')
+            if cat_id not in ramp_cats:
+                continue
+            card_id = a.get('card_id')
+            card = card_by_id.get(card_id)
+            if not card:
+                continue
+            mana_amt = a.get('mana_amount') or a.get('multiplier', 1.0)
+            is_cr = _is_creature(card)
+            if a.get('same_turn') is True:
+                is_cr = False
+            if is_cr:
+                ramp_creature_weight[cat_id] = ramp_creature_weight.get(cat_id, 0) + mana_amt
+            else:
+                ramp_noncreature_weight[cat_id] = ramp_noncreature_weight.get(cat_id, 0) + mana_amt
+
     total_ramp = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in ramp_cats)
     total_draw = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in draw_cats)
     total_alcance = sum(s['cards_assigned'] for s in cat_result['categories'] if s['id'] in alcance_cats)
@@ -171,6 +206,7 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
         extra_draws_by_turn[turn] = extra
 
     results = {}
+    prev_creature_expected = {}
     for turn in range(1, max_turns + 1):
         base_drawn = 7 + (turn - 1)
         extra_draws = extra_draws_by_turn.get(turn, 0.0)
@@ -203,7 +239,18 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
                 min_cmc = cat_min_cmc.get(cid, 0)
                 if mana_before_ramp >= min_cmc:
                     entry = cat_entries.get(cid, cat_entries.get(str(cid), {}))
-                    expected = float(entry.get('total_expected', 0))
+                    total_expected = float(entry.get('total_expected', 0))
+
+                    cw = ramp_creature_weight.get(cid, 0)
+                    ncw = ramp_noncreature_weight.get(cid, 0)
+                    tw = cw + ncw
+                    if tw > 0 and cw > 0:
+                        c_portion = prev_creature_expected.get(cid, 0.0)
+                        nc_portion = total_expected * (ncw / tw) if ncw > 0 else 0.0
+                        expected = c_portion + nc_portion
+                    else:
+                        expected = total_expected
+
                     mana_before_ramp += expected
                     total_ramp_mana += expected
                     ramp_contributions[cat['name']] = round(expected, 2)
@@ -264,6 +311,18 @@ def _analyze_mana_via_categories(deck_cards, deck_size, land_count, avg_cmc, sim
             'prob_hitting_land_drop': round(float(p_land_drop), 3),
             'categories': cat_breakdown,
         }
+
+        # Store creature portion of total_expected for next turn's summoning sickness delay
+        for cr_cid in ramp_cats:
+            cr_entry = cat_entries.get(cr_cid, cat_entries.get(str(cr_cid), {}))
+            cr_te = float(cr_entry.get('total_expected', 0))
+            cr_cw = ramp_creature_weight.get(cr_cid, 0)
+            cr_ncw = ramp_noncreature_weight.get(cr_cid, 0)
+            cr_tw = cr_cw + cr_ncw
+            if cr_tw > 0 and cr_cw > 0:
+                prev_creature_expected[cr_cid] = cr_te * (cr_cw / cr_tw)
+            else:
+                prev_creature_expected[cr_cid] = 0.0
 
     return {
         'land_count': land_count,
